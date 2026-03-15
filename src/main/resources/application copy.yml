@@ -1,0 +1,32 @@
+server:
+  port: 8727 # 요청하신 스프링 부트 포트 번호
+
+spring:
+  # MariaDB 설정
+  datasource:
+    url: jdbc:mariadb://localhost:3303/keminikiosk # DB 포트 3303 반영
+    username: kemini
+    password: # 실제 설정한 비밀번호로 변경하세요
+    driver-class-name: org.mariadb.jdbc.Driver
+  sql:
+    init:
+      mode: always # 서버 실행 시마다 data.sql 실행
+  # JPA 설정
+  jpa:
+    hibernate:
+      ddl-auto: update # 개발 단계에서는 테이블 자동 생성/수정
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+    defer-datasource-initialization: true # Hibernate가 테이블을 만든 후 data.sql이 실행되도록 설정
+
+    # Redis 설정
+  data:
+    redis:
+      host: localhost
+      port: 6373 # 요청하신 Redis 포트 6373 반영
+
+
+# 외부 API (추후 설정)
+# google-cloud-stt-api-key: ...
