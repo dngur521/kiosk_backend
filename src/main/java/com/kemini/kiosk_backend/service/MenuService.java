@@ -32,8 +32,8 @@ public class MenuService {
 
     private final String UPLOAD_DIR = System.getProperty("user.home") + File.separator + "kiosk_uploads" + File.separator + "menu" + File.separator;
     private final String BASE_URL = "https://kemini-kiosk-api.duckdns.org";
-    private final String DEFAULT_IMAGE = "default.png";
 
+    private final String DEFAULT_IMAGE = "no-image.jpg";
     @Transactional
     public MenuResponseDto saveMenu(MenuRequestDto dto) throws IOException {
         MenuCategory category = categoryRepository.findById(dto.getCategoryId())
@@ -68,34 +68,42 @@ public class MenuService {
 
     @Transactional
     public MenuResponseDto updateMenu(Long id, MenuRequestDto dto) throws IOException {
-        // 1. 기존 메뉴 조회
+        // 1. 기존 데이터 조회
         Menu menu = menuRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("수정할 메뉴가 존재하지 않습니다. ID: " + id));
+                .orElseThrow(() -> new IllegalArgumentException("수정할 메뉴가 없습니다. ID: " + id));
 
-        // 2. 카테고리 변경 시 확인
+        // 2. 카테고리: 보냈을 때만 수정
         if (dto.getCategoryId() != null) {
             MenuCategory category = categoryRepository.findById(dto.getCategoryId())
                     .orElseThrow(() -> new IllegalArgumentException("존재하지 않는 카테고리입니다."));
             menu.setCategory(category);
         }
 
-        // 3. 이미지 수정 로직
+        // 3. 이미지: 사진 파일이 넘어왔을 때만 기존 파일 삭제 후 교체
         if (dto.getImageFile() != null && !dto.getImageFile().isEmpty()) {
-            // 기존 파일이 기본 이미지가 아니라면 서버에서 삭제
+            // 기존 이미지가 'no-image.png'가 아닐 때만 실제 파일 삭제
             if (!menu.getImageName().equals(DEFAULT_IMAGE)) {
                 File oldFile = new File(UPLOAD_DIR + menu.getImageName());
                 if (oldFile.exists()) oldFile.delete();
             }
-            // 새 파일 저장 (UUID 적용된 새 이름 반환)
-            String newImageName = saveFileWithUuid(dto.getImageFile());
-            menu.setImageName(newImageName);
+            // 새 이미지 UUID 저장
+            menu.setImageName(saveFileWithUuid(dto.getImageFile()));
         }
 
-        // 4. 나머지 필드 업데이트
-        menu.setName(dto.getName());
-        menu.setPrice(dto.getPrice());
-        menu.setDescription(dto.getDescription());
+        // 4. 나머지 필드: null이 아닐 때만(수정 요청이 있을 때만) 반영
+        if (dto.getName() != null && !dto.getName().isBlank()) {
+            menu.setName(dto.getName());
+        }
+        
+        if (dto.getPrice() != null) {
+            menu.setPrice(dto.getPrice());
+        }
+        
+        if (dto.getDescription() != null) {
+            menu.setDescription(dto.getDescription());
+        }
 
+        // 저장 후 결과 반환 (JPA 변경 감지로 인해 별도의 save 호출 불필요)
         return new MenuResponseDto(menu, BASE_URL);
     }
 
