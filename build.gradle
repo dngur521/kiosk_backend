@@ -40,6 +40,12 @@ dependencies {
 	testImplementation 'org.springframework.boot:spring-boot-starter-websocket-test'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 	implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
+	// Google Cloud Library BOM (버전 관리 효율화)
+    implementation platform('com.google.cloud:libraries-bom:26.32.0')
+
+    // STT & TTS
+    implementation 'com.google.cloud:google-cloud-speech'
+    implementation 'com.google.cloud:google-cloud-texttospeech'
 }
 
 tasks.named('test') {
