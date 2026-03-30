@@ -1,6 +1,7 @@
 package com.kemini.kiosk_backend.handler;
 
 import java.io.FileInputStream;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -26,7 +27,7 @@ import com.google.cloud.speech.v1.StreamingRecognizeResponse;
 import com.google.protobuf.ByteString;
 import com.kemini.kiosk_backend.domain.entity.Menu;
 import com.kemini.kiosk_backend.service.CartService;
-import com.kemini.kiosk_backend.service.MenuResolverService;
+import com.kemini.kiosk_backend.service.OrderParserService;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -39,21 +40,18 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
     private final Map<String, ClientStream<StreamingRecognizeRequest>> sttStreams = new ConcurrentHashMap<>();
     private final Map<String, SpeechClient> speechClients = new ConcurrentHashMap<>();
     
-    private final MenuResolverService menuResolverService; 
+    // 🔥 새롭게 만든 복합 주문 분석 서비스 주입
+    private final OrderParserService orderParserService; 
     private final CartService cartService;
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         log.info("웹소켓 연결 성공: session id = {}", session.getId());
-        // 처음 연결 시에는 SpeechClient만 준비해둡니다.
         initSpeechClient(session);
     }
 
-    // 🔥 STT 스트림을 새로 생성하는 핵심 메서드
     private synchronized void startSttStream(WebSocketSession session) {
         String sessionId = session.getId();
-        
-        // 이미 스트림이 있다면 종료 후 생성 (혹시 모를 중복 방지)
         if (sttStreams.containsKey(sessionId)) return;
 
         try {
@@ -71,44 +69,42 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
                     if (response.getResultsCount() > 0) {
                         StreamingRecognitionResult result = response.getResultsList().get(0);
                         String transcript = result.getAlternativesList().get(0).getTranscript();
-                        boolean isFinal = result.getIsFinal(); // 문장이 끝났는지 확인
+                        boolean isFinal = result.getIsFinal();
 
                         try {
-                            // 1. 실시간 텍스트 전달 (기존 유지)
-                            session.sendMessage(new TextMessage(transcript));
+                            session.sendMessage(new TextMessage(transcript)); // 실시간 자막 전송
 
-                            // 2. 🔥 [핵심 추가] 문장이 완성되었다면 메뉴 매칭 및 장바구니 담기
                             if (isFinal) {
-                                log.info("최종 인식 문장: {}", transcript);
-                                Menu menu = menuResolverService.resolve(transcript.trim());                
+                                log.info("🏁 최종 문장 인식: {}", transcript);
+                                
+                                // 🔥 [핵심 수정] 복합 주문 분석기를 통해 주문 리스트를 가져옵니다.
+                                List<OrderParserService.OrderResult> orders = orderParserService.parseMultiOrder(transcript);
 
-                                if (menu != null) {
-                                    log.info("매칭 성공! 메뉴명: {}", menu.getName());
-                                    
-                                    // 1. CartItem 보따리를 새로 만듭니다.
-                                    com.kemini.kiosk_backend.dto.response.CartItem newItem = 
-                                        new com.kemini.kiosk_backend.dto.response.CartItem();
+                                if (!orders.isEmpty()) {
+                                    for (OrderParserService.OrderResult order : orders) {
+                                        Menu menu = order.getMenu();
+                                        int quantity = order.getQuantity();
 
-                                    // 2. 보따리에 메뉴 정보를 채워 넣습니다. (ID, 이름, 가격, 수량 등)
-                                    newItem.setMenuId(menu.getId());
-                                    newItem.setMenuName(menu.getName());
-                                    newItem.setPrice(menu.getPrice());
-                                    newItem.setQuantity(1); // 음성 주문 시 기본 1개
-                                    // newItem.setImageName(menu.getImageName()); // 필요시 추가
-
-                                    // 장바구니에 담기 (수량 1개 고정)
-                                    cartService.addToCart(sessionId, newItem);
-                                    session.sendMessage(new TextMessage("SYSTEM:ORDER_SUCCESS:" + menu.getName()));
+                                        if (quantity == 0) {
+                                            // '많이' 등 모호한 표현 처리
+                                            session.sendMessage(new TextMessage("SYSTEM:REASK_QUANTITY:" + menu.getName()));
+                                        } else {
+                                            // 정상 주문 처리
+                                            addToCart(sessionId, menu, quantity);
+                                            session.sendMessage(new TextMessage("SYSTEM:ORDER_SUCCESS:" + menu.getName() + ":" + quantity));
+                                        }
+                                    }
+                                } else {
+                                    log.warn("❓ 인식된 메뉴가 없습니다: {}", transcript);
                                 }
                             }
-                        } catch (Exception e) { log.error("전송 에러", e); }
+                        } catch (Exception e) { log.error("STT 응답 처리 중 에러", e); }
                     }
                 }
-
+                
                 @Override
                 public void onError(Throwable t) {
-                    log.warn("STT 스트림 에러 발생 (타임아웃 등): {}", t.getMessage());
-                    // 🔥 에러 발생 시 맵에서 제거하여 다음 전송 때 새로 생성하게 함
+                    log.warn("STT 스트림 에러: {}", t.getMessage());
                     sttStreams.remove(sessionId);
                 }
 
@@ -122,7 +118,6 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
             ClientStream<StreamingRecognizeRequest> clientStream = 
                     speechClient.streamingRecognizeCallable().splitCall(responseObserver);
             
-            // 설정 전송
             StreamingRecognitionConfig config = StreamingRecognitionConfig.newBuilder()
                     .setConfig(RecognitionConfig.newBuilder()
                             .setLanguageCode("ko-KR")
@@ -134,7 +129,7 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
 
             clientStream.send(StreamingRecognizeRequest.newBuilder().setStreamingConfig(config).build());
             sttStreams.put(sessionId, clientStream);
-            log.info("새로운 STT 스트림이 생성되었습니다.");
+            log.info("🚀 새로운 STT 스트림 생성됨");
 
         } catch (Exception e) {
             log.error("STT 스트림 생성 실패", e);
@@ -142,7 +137,8 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
     }
 
     private SpeechClient initSpeechClient(WebSocketSession session) throws Exception {
-        String jsonPath = "/home/kambook/google-key.json";
+        // 경로 확인: /home/hyeok/... 인지 /home/kambook/... 인지 우혁님 서버 환경에 맞추세요!
+        String jsonPath = "/home/kambook/google-key.json"; 
         GoogleCredentials credentials = GoogleCredentials.fromStream(new FileInputStream(jsonPath));
         SpeechSettings settings = SpeechSettings.newBuilder()
                 .setCredentialsProvider(FixedCredentialsProvider.create(credentials))
@@ -155,8 +151,6 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
     @Override
     protected void handleBinaryMessage(WebSocketSession session, BinaryMessage message) throws Exception {
         String sessionId = session.getId();
-        
-        // 🔥 스트림이 없거나 닫혔다면 새로 시작!
         if (!sttStreams.containsKey(sessionId)) {
             startSttStream(session);
         }
@@ -180,6 +174,17 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
         
         SpeechClient client = speechClients.remove(sessionId);
         if (client != null) try { client.close(); } catch (Exception e) {}
-        log.info("세션 자원 정리 완료: {}", sessionId);
+        log.info("🧹 세션 자원 정리 완료: {}", sessionId);
+    }
+    
+    private void addToCart(String sessionId, Menu menu, int qty) {
+        com.kemini.kiosk_backend.dto.response.CartItem newItem = new com.kemini.kiosk_backend.dto.response.CartItem();
+        newItem.setMenuId(menu.getId());
+        newItem.setMenuName(menu.getName());
+        newItem.setPrice(menu.getPrice());
+        newItem.setQuantity(qty);
+
+        cartService.addToCart(sessionId, newItem);
+        log.info("🛒 장바구니 추가: {} ({}개)", menu.getName(), qty);
     }
 }
