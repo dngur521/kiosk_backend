@@ -40,7 +40,6 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
     private final Map<String, ClientStream<StreamingRecognizeRequest>> sttStreams = new ConcurrentHashMap<>();
     private final Map<String, SpeechClient> speechClients = new ConcurrentHashMap<>();
     
-    // 🔥 새롭게 만든 복합 주문 분석 서비스 주입
     private final OrderParserService orderParserService; 
     private final CartService cartService;
 
@@ -72,12 +71,11 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
                         boolean isFinal = result.getIsFinal();
 
                         try {
-                            session.sendMessage(new TextMessage(transcript)); // 실시간 자막 전송
+                            session.sendMessage(new TextMessage(transcript)); 
 
                             if (isFinal) {
                                 log.info("🏁 최종 문장 인식: {}", transcript);
                                 
-                                // 🔥 [핵심 수정] 복합 주문 분석기를 통해 주문 리스트를 가져옵니다.
                                 List<OrderParserService.OrderResult> orders = orderParserService.parseMultiOrder(transcript);
 
                                 if (!orders.isEmpty()) {
@@ -85,34 +83,39 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
                                         Menu menu = order.getMenu();
                                         int quantity = order.getQuantity();
 
-                                        if (quantity == 0) {
-                                            // '많이' 등 모호한 표현 처리
-                                            session.sendMessage(new TextMessage("SYSTEM:REASK_QUANTITY:" + menu.getName()));
-                                        } else {
-                                            // 정상 주문 처리
-                                            addToCart(sessionId, menu, quantity);
-                                            session.sendMessage(new TextMessage("SYSTEM:ORDER_SUCCESS:" + menu.getName() + ":" + quantity));
+                                        // 🔥 [핵심 추가] 취소 요청인지 확인
+                                        if (order.isCancel()) {
+                                            log.info("🗑️ 취소 요청 감지: {}", menu.getName());
+                                            
+                                            if (order.getQuantity() > 0) {
+                                                cartService.updateQuantity(sessionId, menu.getId(), -order.getQuantity()); 
+                                                session.sendMessage(new TextMessage("SYSTEM:CANCEL_SUCCESS:" + menu.getName() + ":" + order.getQuantity()));
+                                            }
+                                            else {
+                                                // CartService의 삭제 메서드 호출
+                                                cartService.removeFromCart(sessionId, menu.getId());
+                                                // 프론트엔드에 취소 성공 알림 전송
+                                                session.sendMessage(new TextMessage("SYSTEM:CANCEL_SUCCESS:" + menu.getName()));
+                                            }
+                                        } 
+                                        else {
+                                            // 기존 주문 로직
+                                            if (quantity == 0) {
+                                                session.sendMessage(new TextMessage("SYSTEM:REASK_QUANTITY:" + menu.getName()));
+                                            } else {
+                                                addToCart(sessionId, menu, quantity);
+                                                session.sendMessage(new TextMessage("SYSTEM:ORDER_SUCCESS:" + menu.getName() + ":" + quantity));
+                                            }
                                         }
                                     }
-                                } else {
-                                    log.warn("❓ 인식된 메뉴가 없습니다: {}", transcript);
                                 }
                             }
                         } catch (Exception e) { log.error("STT 응답 처리 중 에러", e); }
                     }
                 }
                 
-                @Override
-                public void onError(Throwable t) {
-                    log.warn("STT 스트림 에러: {}", t.getMessage());
-                    sttStreams.remove(sessionId);
-                }
-
-                @Override
-                public void onComplete() {
-                    log.info("STT 스트림 완료");
-                    sttStreams.remove(sessionId);
-                }
+                @Override public void onError(Throwable t) { sttStreams.remove(sessionId); }
+                @Override public void onComplete() { sttStreams.remove(sessionId); }
             };
 
             ClientStream<StreamingRecognizeRequest> clientStream = 
@@ -129,15 +132,11 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
 
             clientStream.send(StreamingRecognizeRequest.newBuilder().setStreamingConfig(config).build());
             sttStreams.put(sessionId, clientStream);
-            log.info("🚀 새로운 STT 스트림 생성됨");
 
-        } catch (Exception e) {
-            log.error("STT 스트림 생성 실패", e);
-        }
+        } catch (Exception e) { log.error("STT 스트림 생성 실패", e); }
     }
 
     private SpeechClient initSpeechClient(WebSocketSession session) throws Exception {
-        // 경로 확인: /home/hyeok/... 인지 /home/kambook/... 인지 우혁님 서버 환경에 맞추세요!
         String jsonPath = "/home/kambook/google-key.json"; 
         GoogleCredentials credentials = GoogleCredentials.fromStream(new FileInputStream(jsonPath));
         SpeechSettings settings = SpeechSettings.newBuilder()
@@ -151,9 +150,7 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
     @Override
     protected void handleBinaryMessage(WebSocketSession session, BinaryMessage message) throws Exception {
         String sessionId = session.getId();
-        if (!sttStreams.containsKey(sessionId)) {
-            startSttStream(session);
-        }
+        if (!sttStreams.containsKey(sessionId)) startSttStream(session);
 
         ClientStream<StreamingRecognizeRequest> clientStream = sttStreams.get(sessionId);
         if (clientStream != null) {
@@ -171,10 +168,8 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
     private void cleanup(String sessionId) {
         ClientStream<StreamingRecognizeRequest> stream = sttStreams.remove(sessionId);
         if (stream != null) try { stream.closeSend(); } catch (Exception e) {}
-        
         SpeechClient client = speechClients.remove(sessionId);
         if (client != null) try { client.close(); } catch (Exception e) {}
-        log.info("🧹 세션 자원 정리 완료: {}", sessionId);
     }
     
     private void addToCart(String sessionId, Menu menu, int qty) {
