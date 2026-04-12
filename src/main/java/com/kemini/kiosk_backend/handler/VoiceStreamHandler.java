@@ -26,6 +26,7 @@ import com.google.cloud.speech.v1.StreamingRecognizeRequest;
 import com.google.cloud.speech.v1.StreamingRecognizeResponse;
 import com.google.protobuf.ByteString;
 import com.kemini.kiosk_backend.domain.entity.Menu;
+import com.kemini.kiosk_backend.service.CancelResolverService;
 import com.kemini.kiosk_backend.service.CartService;
 import com.kemini.kiosk_backend.service.OrderParserService;
 
@@ -42,6 +43,7 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
     
     private final OrderParserService orderParserService; 
     private final CartService cartService;
+    private final CancelResolverService cancelResolverService;
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
@@ -75,45 +77,57 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
 
                             if (isFinal) {
                                 log.info("🏁 최종 문장 인식: {}", transcript);
+                                String sessionId = session.getId();
                                 
-                                List<OrderParserService.OrderResult> orders = orderParserService.parseMultiOrder(transcript);
+                                // 파서를 통해 분석된 결과 리스트
+                                List<OrderParserService.OrderResult> orders = orderParserService.parseMultiOrder(sessionId, transcript);
 
                                 if (!orders.isEmpty()) {
                                     for (OrderParserService.OrderResult order : orders) {
-                                        Menu menu = order.getMenu();
-                                        int quantity = order.getQuantity();
+                                        
+                                        // 1. [장바구니 전체 비우기] 메뉴 상관없이 "싹 다 취소해"
+                                        if (order.isAllCancel()) {
+                                            log.info("🗑️ 장바구니 전체 비우기 실행");
+                                            cartService.clearCart(sessionId);
+                                            session.sendMessage(new TextMessage("SYSTEM:CLEAR_CART_SUCCESS"));
+                                            break; // 전체 삭제 시 루프 종료
+                                        }
 
-                                        // 🔥 [핵심 추가] 취소 요청인지 확인
-                                        if (order.isCancel()) {
-                                            log.info("🗑️ 취소 요청 감지: {}", menu.getName());
-                                            
-                                            if (order.getQuantity() > 0) {
-                                                cartService.updateQuantity(sessionId, menu.getId(), -order.getQuantity()); 
-                                                session.sendMessage(new TextMessage("SYSTEM:CANCEL_SUCCESS:" + menu.getName() + ":" + order.getQuantity()));
-                                            }
-                                            else {
-                                                // CartService의 삭제 메서드 호출
-                                                cartService.removeFromCart(sessionId, menu.getId());
-                                                // 프론트엔드에 취소 성공 알림 전송
-                                                session.sendMessage(new TextMessage("SYSTEM:CANCEL_SUCCESS:" + menu.getName()));
-                                            }
+                                        Menu menu = order.getMenu();
+                                        if (menu == null) continue; // 안전장치
+
+                                        // 2. [특정 메뉴 전체 삭제] "아메리카노 전부 빼줘"
+                                        if (order.isMenuAllCancel()) {
+                                            log.info("🗑️ 특정 메뉴 항목 삭제: {}", menu.getName());
+                                            cartService.removeFromCart(sessionId, menu.getId());
+                                            session.sendMessage(new TextMessage("SYSTEM:CANCEL_SUCCESS:" + menu.getName() + ":ALL"));
                                         } 
+                                        
+                                        // 3. [특정 메뉴 수량 차감] "아메리카노 하나 빼줘"
+                                        else if (order.isCancel()) {
+                                            log.info("➖ 수량 차감: {} ({}개)", menu.getName(), order.getQuantity());
+                                            cartService.updateQuantity(sessionId, menu.getId(), -order.getQuantity());
+                                            session.sendMessage(new TextMessage("SYSTEM:CANCEL_SUCCESS:" + menu.getName() + ":" + order.getQuantity()));
+                                        } 
+                                        
+                                        // 4. [일반 주문 추가]
                                         else {
-                                            // 기존 주문 로직
-                                            if (quantity == 0) {
+                                            if (order.getQuantity() == 0) {
+                                                // "많이" 같은 모호한 수량 대응
                                                 session.sendMessage(new TextMessage("SYSTEM:REASK_QUANTITY:" + menu.getName()));
                                             } else {
-                                                addToCart(sessionId, menu, quantity);
-                                                session.sendMessage(new TextMessage("SYSTEM:ORDER_SUCCESS:" + menu.getName() + ":" + quantity));
+                                                addToCart(sessionId, menu, order.getQuantity());
+                                                session.sendMessage(new TextMessage("SYSTEM:ORDER_SUCCESS:" + menu.getName() + ":" + order.getQuantity()));
                                             }
                                         }
                                     }
                                 }
                             }
-                        } catch (Exception e) { log.error("STT 응답 처리 중 에러", e); }
+                        } catch (Exception e) { 
+                            log.error("STT 응답 처리 에러", e); 
+                        }
                     }
                 }
-                
                 @Override public void onError(Throwable t) { sttStreams.remove(sessionId); }
                 @Override public void onComplete() { sttStreams.remove(sessionId); }
             };
