@@ -21,6 +21,7 @@ public class MenuLearningService {
     private final MenuSynonymRepository synonymRepository;
     private final QuantityResolverService quantityResolverService;
     private final CartService cartService; // 🔥 장바구니 직접 수정을 위해 추가
+    private final OrderContextService orderContextService; // 🔥 맥락 공유를 위해 추가!
 
     @Transactional
     public int learnAndAddToCart(String sessionId, LearningRequestDto request) {
@@ -47,6 +48,10 @@ public class MenuLearningService {
             Integer resolvedQty = quantityResolverService.resolveQuantity(contextText);
             quantity = (resolvedQty == null) ? 1 : resolvedQty;
         }
+
+        // 3. 🔥 [핵심 수정] Redis 맥락 업데이트!
+        // 이제 "망고"로 주문해도 시스템은 "방금 주문한 건 망고빙수야"라고 기억하게 됩니다.
+        orderContextService.updateContext(sessionId, request.getMenuId());
 
         // 4. 🔥 백엔드 장바구니에 즉시 반영 (맥락 저장 후 실행)
         Menu menu = menuRepository.findById(request.getMenuId()).get();
