@@ -50,6 +50,10 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         log.info("웹소켓 연결 성공: session id = {}", session.getId());
+
+        // 프론트엔드에게 너의 진짜 세션 ID는 이거라고 알려줌
+        session.sendMessage(new TextMessage("SYSTEM:SESSION_ID:" + session.getId()));
+
         initSpeechClient(session);
     }
 
