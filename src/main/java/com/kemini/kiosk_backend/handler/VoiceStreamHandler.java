@@ -32,6 +32,7 @@ import com.kemini.kiosk_backend.service.OrderParserService;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import tools.jackson.databind.ObjectMapper;
 
 @Slf4j
 @Component
@@ -44,6 +45,7 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
     private final OrderParserService orderParserService; 
     private final CartService cartService;
     private final CancelResolverService cancelResolverService;
+    private final ObjectMapper objectMapper;
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
@@ -78,12 +80,26 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
                             if (isFinal) {
                                 log.info("🏁 최종 문장 인식: {}", transcript);
                                 String sessionId = session.getId();
-                                
+
+                                String baseUrl = "https://kemini-kiosk-api.duckdns.org"; // 주소 정의
                                 // 파서를 통해 분석된 결과 리스트
-                                List<OrderParserService.OrderResult> orders = orderParserService.parseMultiOrder(sessionId, transcript);
+                                List<OrderParserService.OrderResult> orders = orderParserService.parseMultiOrder(sessionId, transcript, baseUrl);
 
                                 if (!orders.isEmpty()) {
                                     for (OrderParserService.OrderResult order : orders) {
+
+                                        if (order.isUnknown()) {
+                                            // 🔥 이미 DTO 리스트이므로 세션 에러가 절대 나지 않습니다.
+                                            List<com.kemini.kiosk_backend.dto.response.MenuResponseDto> suggestions = order.getSuggestedMenus(); 
+
+                                            if (suggestions != null && !suggestions.isEmpty()) {
+                                                String json = objectMapper.writeValueAsString(suggestions);
+                                                session.sendMessage(new TextMessage("SYSTEM:RECOMMEND_LIST:" + json));
+                                            } else {
+                                                session.sendMessage(new TextMessage("SYSTEM:UNKNOWN_COMMAND"));
+                                            }
+                                            break; 
+                                        }
                                         
                                         // 1. [장바구니 전체 비우기] 메뉴 상관없이 "싹 다 취소해"
                                         if (order.isAllCancel()) {

@@ -25,26 +25,26 @@ public class OrderParserService {
     private final MenuSynonymRepository menuSynonymRepository;
     private final QuantityResolverService quantityResolverService;
     private final CancelResolverService cancelResolverService;
-    private final PronounResolverService pronounResolverService; // 🔥 DB 지시어 서비스
-    private final OrderContextService orderContextService;       // 🔥 Redis 문맥 서비스
+    private final PronounResolverService pronounResolverService;
+    private final OrderContextService orderContextService;
 
     @Transactional(readOnly = true)
-    public List<OrderResult> parseMultiOrder(String sessionId, String input) { // 🔥 sessionId 추가
+    public List<OrderResult> parseMultiOrder(String sessionId, String input, String baseUrl) {
         List<OrderResult> results = new ArrayList<>();
         if (input == null || input.isBlank()) return results;
 
         String cleanInput = input.replaceAll("\\s", "").replace(".", "");
         log.info("🔍 분석 시작 (Session: {}): [{}]", sessionId, cleanInput);
 
-        // 1. 메뉴 매칭 시도 (Greedy Match)
-        boolean[] occupied = new boolean[cleanInput.length()];
-        List<MenuMatch> matches = new ArrayList<>();
-
+        // 1. 후보군 생성 (이름 + 시노님)
         List<MenuCandidate> candidates = new ArrayList<>();
         menuRepository.findAll().forEach(m -> candidates.add(new MenuCandidate(m, m.getName().replaceAll("\\s", ""))));
         menuSynonymRepository.findAll().forEach(s -> candidates.add(new MenuCandidate(s.getMenu(), s.getSynonym().replaceAll("\\s", ""))));
-        
         candidates.sort((a, b) -> Integer.compare(b.text.length(), a.text.length()));
+
+        // 2. 정확 매칭 (Greedy Match)
+        boolean[] occupied = new boolean[cleanInput.length()];
+        List<MenuMatch> matches = new ArrayList<>();
 
         for (MenuCandidate cand : candidates) {
             int idx = cleanInput.indexOf(cand.text);
@@ -62,53 +62,93 @@ public class OrderParserService {
             }
         }
 
-        // 2. 🔥 메뉴 매칭이 하나도 없을 때
-        if (matches.isEmpty()) {
-            
-            // A. 🔥 [지시어 우선 체크] "이거", "그거", "방금" 등이 있는지 먼저 확인
-            if (pronounResolverService.hasPronoun(cleanInput)) {
-                Menu lastMenu = orderContextService.getContext(sessionId); // Redis 호출
-                
-                if (lastMenu != null) {
-                    log.info("🎯 지시어 + Redis 문맥 결합 성공: {}", lastMenu.getName());
-                    
-                    Integer qty = quantityResolverService.resolveQuantity(cleanInput);
-                    boolean isThisMenuCanceled = cancelResolverService.hasCancelKeyword(cleanInput);
-                    
-                    // 🔥 여기서 '전부'는 '해당 메뉴 전체 삭제'로 해석됨
-                    boolean isSpecificMenuAllCancel = cancelResolverService.isAllCancelRequest(cleanInput);
+        // 3. 매칭 결과 처리
+        if (!matches.isEmpty()) {
+            matches.sort(Comparator.comparingInt(m -> m.startIdx));
+            for (int i = 0; i < matches.size(); i++) {
+                MenuMatch current = matches.get(i);
+                int nextMatchStart = (i + 1 < matches.size()) ? matches.get(i + 1).startIdx : cleanInput.length();
+                String subText = cleanInput.substring(current.startIdx, nextMatchStart);
 
-                    results.add(new OrderResult(lastMenu, (qty == null ? 1 : qty), isThisMenuCanceled, isSpecificMenuAllCancel, false));
-                    return results; // 지시어 처리가 끝났으므로 반환
+                Integer qty = quantityResolverService.resolveQuantity(subText);
+                boolean isCancel = cancelResolverService.hasCancelKeyword(subText);
+                boolean isMenuAllCancel = cancelResolverService.isAllCancelRequest(subText);
+                
+                orderContextService.updateContext(sessionId, current.menu.getId());
+                results.add(new OrderResult(current.menu, (qty == null ? 1 : qty), isCancel, isMenuAllCancel, false, false, null));
+            }
+        } else {
+            // 매칭 실패 시 지시어/전체취소 체크
+            if (pronounResolverService.hasPronoun(cleanInput)) {
+                Menu lastMenu = orderContextService.getContext(sessionId);
+                if (lastMenu != null) {
+                    Integer qty = quantityResolverService.resolveQuantity(cleanInput);
+                    results.add(new OrderResult(lastMenu, (qty == null ? 1 : qty), cancelResolverService.hasCancelKeyword(cleanInput), cancelResolverService.isAllCancelRequest(cleanInput), false, false, null));
+                    return results;
                 }
             }
-
-            // B. 🔥 지시어가 없을 때만 "장바구니 전체 삭제"인지 확인
             if (cancelResolverService.isAllCancelRequest(cleanInput)) {
-                log.info("🗑️ 장바구니 전체 비우기 감지 (지시어 없음)");
-                results.add(new OrderResult(null, 0, true, true, true)); 
+                results.add(new OrderResult(null, 0, true, true, true, false, null)); 
                 return results;
             }
         }
 
-        // 3. 메뉴가 있는 경우 구역별 분석 및 Redis 컨텍스트 업데이트
-        matches.sort(Comparator.comparingInt(m -> m.startIdx));
-        for (int i = 0; i < matches.size(); i++) {
-            MenuMatch current = matches.get(i);
-            int nextMatchStart = (i + 1 < matches.size()) ? matches.get(i + 1).startIdx : cleanInput.length();
-            String subText = cleanInput.substring(current.startIdx, nextMatchStart);
+        // 4. 🔥 [핵심 수정] 최종 분석 실패 시 유사도 기반 추천 리스트 추출
+        if (results.isEmpty()) {
+            log.info("❓ 매칭 실패 -> 유사 메뉴 검색 시작");
+            
+            // 🔥 [수정] Map을 활용하여 메뉴 ID 기준으로 중복을 제거하고 순서를 유지합니다.
+            List<com.kemini.kiosk_backend.dto.response.MenuResponseDto> suggestions = candidates.stream()
+                .map(cand -> new Object() {
+                    Menu menu = cand.menu;
+                    double score = calculateSimilarity(cleanInput, cand.text);
+                })
+                .filter(obj -> obj.score > 0.3)
+                .sorted((a, b) -> Double.compare(b.score, a.score))
+                // --- 여기서부터 중복 제거 핵심 ---
+                .map(obj -> obj.menu) // 1. 우선 메뉴 엔티티만 꺼냅니다.
+                .collect(java.util.stream.Collectors.toMap(
+                    Menu::getId,      // 2. 메뉴 ID를 키로 사용 (중복 제거 기준)
+                    m -> m,           // 3. 값은 메뉴 객체
+                    (existing, replacement) -> existing, // 4. 중복 ID 발견 시 기존 것 유지
+                    java.util.LinkedHashMap::new         // 5. 정렬 순서(점수 순) 유지
+                ))
+                .values().stream()    // 6. 중복이 제거된 메뉴들만 다시 스트림으로
+                .limit(3)
+                .map(m -> new com.kemini.kiosk_backend.dto.response.MenuResponseDto(m, baseUrl)) // 7. 마지막에 DTO 변환
+                .collect(java.util.stream.Collectors.toList());
 
-            Integer qty = quantityResolverService.resolveQuantity(subText);
-            boolean isThisMenuCanceled = cancelResolverService.hasCancelKeyword(subText);
-            boolean isSpecificMenuAllCancel = cancelResolverService.isAllCancelRequest(subText);
-            
-            // 🔥 [문맥 업데이트] 가장 마지막에 언급된 메뉴를 Redis에 저장
-            orderContextService.updateContext(sessionId, current.menu.getId());
-            
-            results.add(new OrderResult(current.menu, (qty == null) ? 1 : qty, isThisMenuCanceled, isSpecificMenuAllCancel, false));
+            results.add(new OrderResult(null, 0, false, false, false, true, suggestions)); 
         }
         
         return results;
+    }
+
+    /**
+     * 🔥 레벤슈타인 거리를 이용한 문자열 유사도 계산 (0.0 ~ 1.0)
+     */
+    private double calculateSimilarity(String s1, String s2) {
+        int distance = getLevenshteinDistance(s1, s2);
+        int maxLength = Math.max(s1.length(), s2.length());
+        if (maxLength == 0) return 1.0;
+        return 1.0 - ((double) distance / maxLength);
+    }
+
+    private int getLevenshteinDistance(String s, String t) {
+        int n = s.length();
+        int m = t.length();
+        if (n == 0) return m;
+        if (m == 0) return n;
+        int[][] d = new int[n + 1][m + 1];
+        for (int i = 0; i <= n; d[i][0] = i++);
+        for (int j = 0; j <= m; d[0][j] = j++);
+        for (int i = 1; i <= n; i++) {
+            for (int j = 1; j <= m; j++) {
+                int cost = (t.charAt(j - 1) == s.charAt(i - 1)) ? 0 : 1;
+                d[i][j] = Math.min(Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1), d[i - 1][j - 1] + cost);
+            }
+        }
+        return d[n][m];
     }
 
     // --- 내부 헬퍼 클래스 ---
@@ -128,6 +168,8 @@ public class OrderParserService {
         private boolean isCancel;
         private boolean isMenuAllCancel;
         private boolean isAllCancel;
+        private boolean isUnknown;
+        private List<com.kemini.kiosk_backend.dto.response.MenuResponseDto> suggestedMenus;
     }
 
     @AllArgsConstructor

@@ -27,4 +27,9 @@ public class MenuSynonym {
 
     @Column(nullable = false)
     private String synonym; // 방언 또는 유의어 (예: 아아, 주이소)
+
+    public MenuSynonym(Menu menu, String synonym) {
+        this.menu = menu;
+        this.synonym = synonym;
+    }
 }
