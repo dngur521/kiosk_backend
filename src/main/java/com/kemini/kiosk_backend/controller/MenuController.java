@@ -27,30 +27,30 @@ public class MenuController {
 
     private final MenuService menuService;
 
-    // 메뉴 생성 (이미지 업로드를 위해 Multipart/form-data 사용)
+    // 메뉴 생성
     @PostMapping
     public ApiResponse<MenuResponseDto> createMenu(@ModelAttribute MenuRequestDto dto) throws IOException {
         return ApiResponse.success("메뉴가 생성되었습니다.", menuService.saveMenu(dto));
     }
 
-    // 메뉴 조회 (필터링 포함)
+    // 🔥 [수정] @RequestParam("categoryId") 추가
     @GetMapping
-    public ApiResponse<List<MenuResponseDto>> getMenus(@RequestParam(required = false) Long categoryId) {
+    public ApiResponse<List<MenuResponseDto>> getMenus(@RequestParam(value = "categoryId", required = false) Long categoryId) {
         return ApiResponse.success(menuService.getMenus(categoryId));
     }
 
-    // 메뉴 수정
+    // 🔥 [수정] @PathVariable("id") 추가
     @PutMapping(value = "/{id}", consumes = {"multipart/form-data"})
     public ApiResponse<MenuResponseDto> updateMenu(
-            @PathVariable Long id, 
+            @PathVariable("id") Long id, 
             @ModelAttribute MenuRequestDto dto) throws IOException {
         
         return ApiResponse.success("메뉴가 성공적으로 수정되었습니다.", menuService.updateMenu(id, dto));
     }
 
-    // 메뉴 삭제
+    // 🔥 [수정] @PathVariable("id") 추가
     @DeleteMapping("/{id}")
-    public ApiResponse<Void> deleteMenu(@PathVariable Long id) {
+    public ApiResponse<Void> deleteMenu(@PathVariable("id") Long id) {
         menuService.deleteMenu(id);
         return ApiResponse.success("메뉴가 삭제되었습니다.", null);
     }

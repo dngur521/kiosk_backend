@@ -15,4 +15,8 @@ public interface MenuRepository extends JpaRepository<Menu, Long> {
 
     // 이름에 특정 단어가 포함된 메뉴 리스트 검색
     List<Menu> findByNameContaining(String name);
+
+    // 카테고리 이름으로 메뉴 리스트 조회
+    List<Menu> findByCategoryName(String categoryName);
+
 }

@@ -37,9 +37,14 @@ public class OrderParserService {
         log.info("🔍 분석 시작 (Session: {}): [{}]", sessionId, cleanInput);
 
         // 1. 후보군 생성 (이름 + 시노님)
+        // 1. 후보군 생성 (직접 이름 vs 학습된 별명 구분)
         List<MenuCandidate> candidates = new ArrayList<>();
-        menuRepository.findAll().forEach(m -> candidates.add(new MenuCandidate(m, m.getName().replaceAll("\\s", ""))));
-        menuSynonymRepository.findAll().forEach(s -> candidates.add(new MenuCandidate(s.getMenu(), s.getSynonym().replaceAll("\\s", ""))));
+        // 직접 이름은 isSynonym = false
+        menuRepository.findAll().forEach(m -> 
+            candidates.add(new MenuCandidate(m, m.getName().replaceAll("\\s", ""), false)));
+        // 학습된 별명은 isSynonym = true
+        menuSynonymRepository.findAll().forEach(s -> 
+            candidates.add(new MenuCandidate(s.getMenu(), s.getSynonym().replaceAll("\\s", ""), true)));
         candidates.sort((a, b) -> Integer.compare(b.text.length(), a.text.length()));
 
         // 2. 정확 매칭 (Greedy Match)
@@ -55,7 +60,8 @@ public class OrderParserService {
                 }
 
                 if (!isAlreadyOccupied) {
-                    matches.add(new MenuMatch(cand.menu, idx, cand.text.length()));
+                    // 🔥 매칭 시 시노님 여부를 함께 저장
+                    matches.add(new MenuMatch(cand.menu, idx, cand.text.length(), cand.isSynonym));
                     for (int i = idx; i < idx + cand.text.length(); i++) occupied[i] = true;
                 }
                 idx = cleanInput.indexOf(cand.text, idx + 1);
@@ -75,7 +81,7 @@ public class OrderParserService {
                 boolean isMenuAllCancel = cancelResolverService.isAllCancelRequest(subText);
                 
                 orderContextService.updateContext(sessionId, current.menu.getId());
-                results.add(new OrderResult(current.menu, (qty == null ? 1 : qty), isCancel, isMenuAllCancel, false, false, null));
+                results.add(new OrderResult(new com.kemini.kiosk_backend.dto.response.MenuResponseDto(current.menu, baseUrl), (qty == null ? 1 : qty), isCancel, isMenuAllCancel, false, false, null, current.isSynonym));
             }
         } else {
             // 매칭 실패 시 지시어/전체취소 체크
@@ -83,12 +89,12 @@ public class OrderParserService {
                 Menu lastMenu = orderContextService.getContext(sessionId);
                 if (lastMenu != null) {
                     Integer qty = quantityResolverService.resolveQuantity(cleanInput);
-                    results.add(new OrderResult(lastMenu, (qty == null ? 1 : qty), cancelResolverService.hasCancelKeyword(cleanInput), cancelResolverService.isAllCancelRequest(cleanInput), false, false, null));
+                    results.add(new OrderResult(new com.kemini.kiosk_backend.dto.response.MenuResponseDto(lastMenu, baseUrl), (qty == null ? 1 : qty), cancelResolverService.hasCancelKeyword(cleanInput), cancelResolverService.isAllCancelRequest(cleanInput), false, false, null, false));
                     return results;
                 }
             }
             if (cancelResolverService.isAllCancelRequest(cleanInput)) {
-                results.add(new OrderResult(null, 0, true, true, true, false, null)); 
+                results.add(new OrderResult(null, 0, true, true, true, false, null, false)); 
                 return results;
             }
         }
@@ -118,7 +124,7 @@ public class OrderParserService {
                 .map(m -> new com.kemini.kiosk_backend.dto.response.MenuResponseDto(m, baseUrl)) // 7. 마지막에 DTO 변환
                 .collect(java.util.stream.Collectors.toList());
 
-            results.add(new OrderResult(null, 0, false, false, false, true, suggestions)); 
+            results.add(new OrderResult(null, 0, false, false, false, true, suggestions, false)); 
         }
         
         return results;
@@ -158,23 +164,26 @@ public class OrderParserService {
         Menu menu;
         int startIdx;
         int length;
+        boolean isSynonym;
     }
 
     @AllArgsConstructor
     @Getter
     public static class OrderResult {
-        private Menu menu;
+        private com.kemini.kiosk_backend.dto.response.MenuResponseDto menuDto;
         private int quantity;
         private boolean isCancel;
         private boolean isMenuAllCancel;
         private boolean isAllCancel;
         private boolean isUnknown;
         private List<com.kemini.kiosk_backend.dto.response.MenuResponseDto> suggestedMenus;
+        private boolean isLearnedMatch;
     }
 
     @AllArgsConstructor
     private static class MenuCandidate {
         Menu menu;
         String text;
+        boolean isSynonym;
     }
 }
