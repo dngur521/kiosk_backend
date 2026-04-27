@@ -49,10 +49,7 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         log.info("웹소켓 연결 성공: session id = {}", session.getId());
-
-        // 프론트엔드에게 너의 진짜 세션 ID는 이거라고 알려줌
         session.sendMessage(new TextMessage("SYSTEM:SESSION_ID:" + session.getId()));
-
         initSpeechClient(session);
     }
 
@@ -67,8 +64,7 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
             }
 
             ResponseObserver<StreamingRecognizeResponse> responseObserver = new ResponseObserver<>() {
-                @Override
-                public void onStart(StreamController controller) {}
+                @Override public void onStart(StreamController controller) {}
 
                 @Override
                 public void onResponse(StreamingRecognizeResponse response) {
@@ -85,66 +81,39 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
                                 String sessionId = session.getId();
                                 String baseUrl = "https://kemini-kiosk-api.duckdns.org"; 
                                 
-                                // 파서에서 이제 MenuResponseDto가 포함된 OrderResult를 반환합니다.
+                                // 1. 파서에서 분석 결과 리스트를 가져옵니다.
                                 List<OrderParserService.OrderResult> orders = orderParserService.parseMultiOrder(sessionId, transcript, baseUrl);
 
                                 if (!orders.isEmpty()) {
+                                    // 🔥 [장바구니 로직 실행]
+                                    // 확신이 있는 주문(Direct Match)은 여기서 즉시 장바구니 CRUD를 수행합니다.
                                     for (OrderParserService.OrderResult order : orders) {
-                                        
-                                        // 1. [추천 리스트] 매칭 실패 시 (기존 유지)
-                                        if (order.isUnknown()) {
-                                            List<com.kemini.kiosk_backend.dto.response.MenuResponseDto> suggestions = order.getSuggestedMenus(); 
-                                            if (suggestions != null && !suggestions.isEmpty()) {
-                                                String json = objectMapper.writeValueAsString(suggestions);
-                                                session.sendMessage(new TextMessage("SYSTEM:RECOMMEND_LIST:" + json));
-                                            } else {
-                                                session.sendMessage(new TextMessage("SYSTEM:UNKNOWN_COMMAND"));
-                                            }
-                                            break; 
-                                        }
+                                        // 확인 모달이 필요한 경우나 알 수 없는 경우는 장바구니 처리를 건너뜁니다.
+                                        if (order.isUnknown() || order.isLearnedMatch()) continue;
 
-                                        // 2. 🔥 [수정] 학습된 단어 매칭 시 (CONFIRM_MATCH)
-                                        if (order.isLearnedMatch() && !order.isCancel() && !order.isAllCancel()) {
-                                            // order.getMenuDto()를 사용하여 이미 완성된 DTO를 꺼냅니다.
-                                            com.kemini.kiosk_backend.dto.response.MenuResponseDto menuDto = order.getMenuDto();
-                                            log.info("🤔 학습 데이터 매칭됨. 사용자 확인 절차 시작: {}", menuDto.getName());
-                                            
-                                            // 더 이상 new MenuResponseDto(...)를 호출할 필요가 없습니다. (에러 원인 제거)
-                                            String json = objectMapper.writeValueAsString(menuDto);
-                                            session.sendMessage(new TextMessage("SYSTEM:CONFIRM_MATCH:" + json));
-                                            break; 
-                                        }
-
-                                        // 3. [전체 비우기] (기존 유지)
+                                        // 전체 비우기 처리
                                         if (order.isAllCancel()) {
                                             cartService.clearCart(sessionId);
-                                            session.sendMessage(new TextMessage("SYSTEM:CLEAR_CART_SUCCESS"));
-                                            break;
-                                        }
-
-                                        // 🔥 엔티티 대신 DTO를 사용합니다.
-                                        com.kemini.kiosk_backend.dto.response.MenuResponseDto menuDto = order.getMenuDto();
-                                        if (menuDto == null) continue;
-
-                                        // 4. [취소 및 일반 주문]
-                                        if (order.isMenuAllCancel()) {
-                                            // cartService는 보통 ID를 받으므로 menuDto.getId() 사용
-                                            cartService.removeFromCart(sessionId, menuDto.getId());
-                                            session.sendMessage(new TextMessage("SYSTEM:CANCEL_SUCCESS:" + menuDto.getName() + ":ALL"));
-                                        } else if (order.isCancel()) {
-                                            cartService.updateQuantity(sessionId, menuDto.getId(), -order.getQuantity());
-                                            session.sendMessage(new TextMessage("SYSTEM:CANCEL_SUCCESS:" + menuDto.getName() + ":" + order.getQuantity()));
-                                        } else {
-                                            if (order.getQuantity() == 0) {
-                                                session.sendMessage(new TextMessage("SYSTEM:REASK_QUANTITY:" + menuDto.getName()));
-                                            } else {
-                                                // addToCart 헬퍼 함수가 Menu 엔티티를 받는다면, ID를 받거나 
-                                                // DTO 정보를 활용하도록 내부를 살짝 수정해야 할 수 있습니다.
-                                                addToCart(sessionId, menuDto, order.getQuantity());
-                                                session.sendMessage(new TextMessage("SYSTEM:ORDER_SUCCESS:" + menuDto.getName() + ":" + order.getQuantity()));
+                                        } 
+                                        // 일반 주문/취소 처리
+                                        else if (order.getMenuDto() != null) {
+                                            Long menuId = order.getMenuDto().getId();
+                                            if (order.isMenuAllCancel()) {
+                                                cartService.removeFromCart(sessionId, menuId);
+                                            } else if (order.isCancel()) {
+                                                cartService.updateQuantity(sessionId, menuId, -order.getQuantity());
+                                            } else if (order.getQuantity() > 0) {
+                                                addToCart(sessionId, order.getMenuDto(), order.getQuantity());
                                             }
                                         }
                                     }
+
+                                    // 🔥 [핵심 수정] 모든 분석 결과를 '보따리(JSON)'로 묶어서 프론트에 딱 한 번만 보냅니다.
+                                    // 이렇게 해야 프론트가 큐를 쌓아서 하나씩 모달을 띄울 수 있습니다.
+                                    String ordersJson = objectMapper.writeValueAsString(orders);
+                                    session.sendMessage(new TextMessage("SYSTEM:PROCESS_ORDERS:" + ordersJson));
+                                    
+                                    log.info("📦 복합 주문 처리 및 전송 완료 ({}건)", orders.size());
                                 }
                             }
                         } catch (Exception e) { 
