@@ -32,22 +32,25 @@ public class RecommendationService {
             RecommendationResponse response = restTemplate.postForObject(
                     PYTHON_SERVER_URL, request, RecommendationResponse.class);
 
-            if (response == null || response.recommendations() == null) return Collections.emptyList();
+            if (response == null || response.recommendations() == null || response.recommendations().isEmpty()) {
+                return Collections.emptyList();
+            }
 
-            // 1. 신뢰도 필터링 (0.75 이상) 및 AI가 준 순서(ID 리스트) 보존
+            // 1. 🔥 [상대적 필터링 로직]
+            // 파이썬 엔진에서 이미 정렬해서 보내주므로, 첫 번째 요소가 최고점입니다.
+            double maxScore = response.recommendations().get(0).score();
+            log.info("🎯 AI 추천 최고점: {}, 필터 기준점(max - 0.05): {}", maxScore, (maxScore - 0.05));
+
+            // 최고점과의 차이가 0.05 이내인 메뉴만 필터링
             List<RecommendationResponse.MenuInfo> filteredAiResults = response.recommendations().stream()
-                    .filter(m -> m.score() >= 0.75)
+                    .filter(m -> m.score() >= 0.5 && m.score() >= (maxScore - 0.05))
                     .toList();
 
-            if (filteredAiResults.isEmpty()) return Collections.emptyList();
-
-            List<Long> ids = filteredAiResults.stream().map(RecommendationResponse.MenuInfo::id).toList();
-
             // 2. DB에서 메뉴 정보 조회
+            List<Long> ids = filteredAiResults.stream().map(RecommendationResponse.MenuInfo::id).toList();
             List<Menu> menus = menuRepository.findAllById(ids);
 
-            // 3. 🔥 [핵심] AI가 준 순서대로 다시 정렬
-            // AI 결과 리스트(filteredAiResults)를 순회하며 매칭되는 메뉴를 DTO로 변환
+            // 3. AI가 준 순서대로 다시 정렬 (기존 로직 유지)
             return filteredAiResults.stream()
                     .map(aiInfo -> {
                         Menu menu = menus.stream()
