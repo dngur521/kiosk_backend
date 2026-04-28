@@ -12,6 +12,7 @@ public class MenuResponseDto {
     private String description;
     private String imageUrl; // 프론트엔드가 사용할 풀 경로
     private String categoryName;
+    private String semanticContext;
 
     public MenuResponseDto(Menu menu, String baseUrl) {
         this.id = menu.getId();
@@ -21,5 +22,6 @@ public class MenuResponseDto {
         this.categoryName = menu.getCategory().getName();
         // 이미지 경로 조립
         this.imageUrl = baseUrl + "/uploads/menu/" + menu.getImageName();
+        this.semanticContext = menu.getSemanticContext();
     }
 }

@@ -26,6 +26,9 @@ public class Menu {
 
     private Integer price;
     private String description;
+    
+    @Column(columnDefinition = "TEXT") 
+    private String semanticContext;
     private String imageName; // UUID가 포함된 파일명 저장
 
     @ManyToOne(fetch = FetchType.LAZY)

@@ -12,4 +12,5 @@ public class MenuRequestDto {
     private String description;
     private Long categoryId;
     private MultipartFile imageFile; // 실제 파일 데이터
+    private String semanticContext;
 }

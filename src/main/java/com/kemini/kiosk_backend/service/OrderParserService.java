@@ -3,6 +3,7 @@ package com.kemini.kiosk_backend.service;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,30 +29,31 @@ public class OrderParserService {
     private final CancelResolverService cancelResolverService;
     private final PronounResolverService pronounResolverService;
     private final OrderContextService orderContextService;
+    
+    // 🔥 [추가] 고성능 AI 추천 엔진 서비스
+    private final RecommendationService recommendationService;
 
-    /**
-     * [핵심 메서드] 사용자의 음성 텍스트를 분석하여 다중 주문 결과를 반환합니다.
-     */
     @Transactional(readOnly = true)
     public List<OrderResult> parseMultiOrder(String sessionId, String input, String baseUrl) {
         List<OrderResult> results = new ArrayList<>();
         if (input == null || input.isBlank()) return results;
 
-        // 공백 및 마침표 제거하여 분석 효율화
         String cleanInput = input.replaceAll("\\s", "").replace(".", "");
-        log.info("🔍 [분석 시작] 세션: {}, 입력: [{}]", sessionId, cleanInput);
 
-        // 1. 매칭 후보군 생성 (정식 명칭 + 학습된 별칭)
+        String semanticQuery = input.trim();
+
+        log.info("🔍 [분석 시작] 세션: {}, 원본(AI용): [{}], 정제(규칙용): [{}]", sessionId, semanticQuery, cleanInput);
+
+        // --- [기존 로직 1] 매칭 후보군 생성 (유지) ---
         List<MenuCandidate> candidates = new ArrayList<>();
         menuRepository.findAll().forEach(m -> 
             candidates.add(new MenuCandidate(m, m.getName().replaceAll("\\s", ""), false)));
         menuSynonymRepository.findAll().forEach(s -> 
             candidates.add(new MenuCandidate(s.getMenu(), s.getSynonym().replaceAll("\\s", ""), true)));
         
-        // 긴 단어부터 매칭하기 위해 내림차순 정렬 (Greedy Match 준비)
         candidates.sort((a, b) -> Integer.compare(b.text.length(), a.text.length()));
 
-        // 2. 텍스트 내 메뉴 위치 매칭 (Greedy Match)
+        // --- [기존 로직 2] Greedy Match (유지) ---
         boolean[] occupied = new boolean[cleanInput.length()];
         List<MenuMatch> matches = new ArrayList<>();
 
@@ -71,50 +73,24 @@ public class OrderParserService {
             }
         }
 
-        // 3. 매칭된 메뉴별 문맥 분석 (수량, 취소 여부 등)
+        // --- [기존 로직 3] 매칭 결과 처리 (유지) ---
         if (!matches.isEmpty()) {
-            // 문장 내 등장 순서대로 정렬
             matches.sort(Comparator.comparingInt(m -> m.startIdx));
-
-            int lastEndIdx = 0; // 이전 메뉴 분석이 끝난 지점 추적
-
             for (int i = 0; i < matches.size(); i++) {
                 MenuMatch current = matches.get(i);
-                
-                // 다음 메뉴의 시작 지점 혹은 문장 끝 지점
                 int nextMatchStart = (i + 1 < matches.size()) ? matches.get(i + 1).startIdx : cleanInput.length();
-                
-                // 🔥 [수정 포인트] 분석 범위를 이전 메뉴 종료 지점부터 확장하여 "A 빼고 B" 문맥을 완벽히 포착
-                // 첫 번째 메뉴만 0부터, 나머지는 자기 이름(current.startIdx)부터 분석
-                // 이렇게 해야 "아메리카노 빼고"의 "빼고"가 카페라떼 분석 범위에 안 들어갑니다.
                 int startSearchIdx = (i == 0) ? 0 : current.startIdx;
                 String subText = cleanInput.substring(startSearchIdx, nextMatchStart);
 
-                log.info("🎯 메뉴 [{}]의 분석 범위: {}", current.menu.getName(), subText);
-
-                // 수량 및 취소 키워드 분석
                 Integer qty = quantityResolverService.resolveQuantity(subText);
                 boolean isCancel = cancelResolverService.hasCancelKeyword(subText);
                 boolean isMenuAllCancel = cancelResolverService.isAllCancelRequest(subText);
                 
-                // 대화 문맥(Context) 업데이트 및 결과 추가
                 orderContextService.updateContext(sessionId, current.menu.getId());
-                results.add(new OrderResult(
-                    new MenuResponseDto(current.menu, baseUrl), 
-                    (qty == null ? 1 : qty), 
-                    isCancel, 
-                    isMenuAllCancel, 
-                    false, 
-                    false, 
-                    null, 
-                    current.isSynonym
-                ));
-
-                // 현재 메뉴가 끝난 지점을 저장 (다음 메뉴 분석의 시작점)
-                lastEndIdx = current.startIdx + current.length;
+                results.add(new OrderResult(new MenuResponseDto(current.menu, baseUrl), (qty == null ? 1 : qty), isCancel, isMenuAllCancel, false, false, null, current.isSynonym));
             }
         } else {
-            // 4. 메뉴 직접 매칭 실패 시 (지시어 처리 및 전체 취소 확인)
+            // --- [기존 로직 4] 지시어 및 전체 취소 처리 (유지) ---
             if (pronounResolverService.hasPronoun(cleanInput)) {
                 Menu lastMenu = orderContextService.getContext(sessionId);
                 if (lastMenu != null) {
@@ -129,28 +105,29 @@ public class OrderParserService {
             }
         }
 
-        // 5. 최종 결과가 없을 경우 유사도 기반 추천 리스트 추출
+        // --- [하이브리드 로직 5] 매칭 실패 시 추천 엔진 가동 ---
         if (results.isEmpty()) {
-            log.info("❓ 매칭 실패 -> 유사 메뉴 검색 시작");
+            log.info("❓ 직접 매칭 실패 -> 하이브리드 추천 단계 진입");
             
-            List<MenuResponseDto> suggestions = candidates.stream()
-                .map(cand -> new Object() {
-                    Menu menu = cand.menu;
-                    double score = calculateSimilarity(cleanInput, cand.text);
-                })
-                .filter(obj -> obj.score > 0.3) // 유사도 임계값
-                .sorted((a, b) -> Double.compare(b.score, a.score))
-                .map(obj -> obj.menu)
-                .collect(java.util.stream.Collectors.toMap(
-                    Menu::getId,
-                    m -> m,
-                    (existing, replacement) -> existing, // 중복 ID 제거
-                    java.util.LinkedHashMap::new
-                ))
-                .values().stream()
-                .limit(3)
-                .map(m -> new MenuResponseDto(m, baseUrl))
-                .collect(java.util.stream.Collectors.toList());
+            // 1단계: 파이썬 AI 시맨틱 서치 시도 (0.85점 필터링 로직 포함됨)
+            List<MenuResponseDto> suggestions = recommendationService.getSemanticRecommendations(semanticQuery);
+
+            // 2단계: AI 결과가 없을 경우, 기존의 레벤슈타인 거리 기반 유사도 로직으로 백업 (우혁님 로직 보존)
+            if (suggestions.isEmpty()) {
+                log.info("⚠️ AI 추천 결과 없음 (Query: {}) -> 레벤슈타인 백업 가동", semanticQuery);
+                suggestions = candidates.stream()
+                    .map(cand -> new Object() {
+                        Menu menu = cand.menu;
+                        double score = calculateSimilarity(cleanInput, cand.text);
+                    })
+                    .filter(obj -> obj.score > 0.3) 
+                    .sorted((a, b) -> Double.compare(b.score, a.score))
+                    .map(obj -> obj.menu)
+                    .distinct()
+                    .limit(3)
+                    .map(m -> new MenuResponseDto(m, baseUrl))
+                    .collect(Collectors.toList());
+            }
 
             results.add(new OrderResult(null, 0, false, false, false, true, suggestions, false)); 
         }
@@ -159,7 +136,7 @@ public class OrderParserService {
     }
 
     /**
-     * 레벤슈타인 거리를 활용한 문자열 유사도 계산 (0.0 ~ 1.0)
+     * [보존] 레벤슈타인 거리를 활용한 문자열 유사도 계산
      */
     private double calculateSimilarity(String s1, String s2) {
         int distance = getLevenshteinDistance(s1, s2);
@@ -175,7 +152,7 @@ public class OrderParserService {
         if (m == 0) return n;
         int[][] d = new int[n + 1][m + 1];
         for (int i = 0; i <= n; d[i][0] = i++);
-        for (int j = 0; j <= m; d[0][j] = j++);
+        for (int j = 0; j <= m; j++) d[0][j] = j;
         for (int i = 1; i <= n; i++) {
             for (int j = 1; j <= m; j++) {
                 int cost = (t.charAt(j - 1) == s.charAt(i - 1)) ? 0 : 1;
@@ -185,8 +162,7 @@ public class OrderParserService {
         return d[n][m];
     }
 
-    // --- 내부 헬퍼 클래스 및 DTO ---
-    
+    // --- 내부 구조 동일 ---
     @AllArgsConstructor
     private static class MenuMatch {
         Menu menu;

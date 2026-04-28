@@ -49,6 +49,7 @@ public class MenuService {
                 .name(dto.getName())
                 .price(dto.getPrice())
                 .description(dto.getDescription())
+                .semanticContext(dto.getSemanticContext())
                 .imageName(imageName)
                 .category(category)
                 .build();
@@ -102,6 +103,8 @@ public class MenuService {
         if (dto.getDescription() != null) {
             menu.setDescription(dto.getDescription());
         }
+
+        if (dto.getSemanticContext() != null) menu.setSemanticContext(dto.getSemanticContext());
 
         // 저장 후 결과 반환 (JPA 변경 감지로 인해 별도의 save 호출 불필요)
         return new MenuResponseDto(menu, BASE_URL);

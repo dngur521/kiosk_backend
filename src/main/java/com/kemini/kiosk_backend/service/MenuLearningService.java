@@ -30,34 +30,53 @@ public class MenuLearningService {
 
         // 1. 띄어쓰기 기준 분리
         String[] parts = rawText.split("\\s+");
-        String synonymToLearn = parts[0]; // "바닐라"
         
-        // 2. 첫 단어 학습 (이미 존재하는지 체크 후 저장)
-        if (!synonymRepository.existsBySynonym(synonymToLearn)) {
-            Menu menu = menuRepository.findById(request.getMenuId())
-                    .orElseThrow(() -> new RuntimeException("메뉴 없음"));
-            synonymRepository.save(new MenuSynonym(menu, synonymToLearn));
-            log.info("🎓 신규 시노님 학습: {}", synonymToLearn);
+        // 2. 🔥 [핵심] 어디서부터 수량인지 경계선 찾기
+        int splitIdx = parts.length; // 기본값은 전체를 메뉴명으로 간주
+        for (int i = 0; i < parts.length; i++) {
+            // 단어 하나가 수량으로 해석되는지 확인 (예: "하나", "두", "1")
+            if (quantityResolverService.resolveQuantity(parts[i]) != null) {
+                splitIdx = i; 
+                break; // 수량 단어가 처음 발견되면 그 전까지가 메뉴 이름!
+            }
         }
 
-        // 3. 🔥 남은 텍스트에서 수량 맥락 추출
+        // 3. 🔥 메뉴 이름 합치기 (수량 전까지 모든 단어)
+        // 예: "달콤한 빵 하나 줘" -> splitIdx는 2 (단어 "하나"의 위치)
+        // synonymToLearn -> "달콤한 빵"
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < splitIdx; i++) {
+            sb.append(parts[i]).append(" ");
+        }
+        String synonymToLearn = sb.toString().trim(); // 공백 제거
+        String synonymForMatch = synonymToLearn.replaceAll("\\s", ""); // "달콤한빵" (매칭용)
+
+        // 4. 시노님 학습 (0순위 긴 단어로 저장)
+        if (!synonymRepository.existsBySynonym(synonymForMatch)) {
+            Menu menu = menuRepository.findById(request.getMenuId())
+                    .orElseThrow(() -> new RuntimeException("메뉴 없음"));
+            synonymRepository.save(new MenuSynonym(menu, synonymForMatch));
+            log.info("🎓 신규 시노님 학습 완료: [{}]", synonymForMatch);
+        }
+
+        // 5. 🔥 남은 텍스트(수량 부분)에서 수량 맥락 추출
         int quantity = 1;
-        if (parts.length > 1) {
-            // 첫 단어 제외한 나머지 합치기 (예: "두 개 줘")
-            String contextText = rawText.substring(rawText.indexOf(parts[1]));
-            Integer resolvedQty = quantityResolverService.resolveQuantity(contextText);
+        if (splitIdx < parts.length) {
+            // splitIdx부터 끝까지 합쳐서 수량 분석 (예: "하나 줘")
+            StringBuilder contextBuilder = new StringBuilder();
+            for (int i = splitIdx; i < parts.length; i++) {
+                contextBuilder.append(parts[i]).append(" ");
+            }
+            Integer resolvedQty = quantityResolverService.resolveQuantity(contextBuilder.toString().trim());
             quantity = (resolvedQty == null) ? 1 : resolvedQty;
         }
 
-        // 3. 🔥 [핵심 수정] Redis 맥락 업데이트!
-        // 이제 "망고"로 주문해도 시스템은 "방금 주문한 건 망고빙수야"라고 기억하게 됩니다.
+        // 6. Redis 맥락 업데이트 및 장바구니 추가 (기존 로직 유지)
         orderContextService.updateContext(sessionId, request.getMenuId());
-
-        // 4. 🔥 백엔드 장바구니에 즉시 반영 (맥락 저장 후 실행)
         Menu menu = menuRepository.findById(request.getMenuId()).get();
         addToCart(sessionId, menu, quantity);
         
-        return quantity; // 프론트 UI 업데이트를 위해 반환
+        return quantity;
     }
 
     private void addToCart(String sessionId, Menu menu, int qty) {
