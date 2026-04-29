@@ -20,8 +20,7 @@ public class MenuResponseDto {
         this.price = menu.getPrice();
         this.description = menu.getDescription();
         this.categoryName = menu.getCategory().getName();
-        // 이미지 경로 조립
-        this.imageUrl = baseUrl + "/uploads/menu/" + menu.getImageName();
+        this.imageUrl = baseUrl + "/uploads/menu/" + menu.getImageName(); // 이미지 경로 조립
         this.semanticContext = menu.getSemanticContext();
     }
 }

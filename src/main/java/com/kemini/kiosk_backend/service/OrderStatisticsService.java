@@ -37,9 +37,7 @@ public class OrderStatisticsService {
         }
     }
 
-    /**
-     * 🔥 데이터가 없어도 무조건 3개를 채워주는 지능형 추천 로직
-     */
+    // 데이터가 없어도 무조건 3개를 채워주는 지능형 추천 로직
     @Transactional(readOnly = true)
     public List<MenuResponseDto> getTop3Menus(String categoryName, String baseUrl) {
         // 1. 통계 DB에서 주문량 많은 순으로 추출 (필터링 적용)

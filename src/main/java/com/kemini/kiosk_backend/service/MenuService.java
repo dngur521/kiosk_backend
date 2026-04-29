@@ -39,7 +39,7 @@ public class MenuService {
         MenuCategory category = categoryRepository.findById(dto.getCategoryId())
                 .orElseThrow(() -> new IllegalArgumentException("카테고리가 없습니다."));
 
-        // 1. UUID를 활용한 파일 이름 충돌 방지 로직
+        // UUID를 활용한 파일 이름 충돌 방지 로직
         String imageName = DEFAULT_IMAGE;
         if (dto.getImageFile() != null && !dto.getImageFile().isEmpty()) {
             imageName = saveFileWithUuid(dto.getImageFile());

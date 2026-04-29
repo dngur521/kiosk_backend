@@ -30,7 +30,6 @@ public class OrderStatisticsController {
         
         String baseUrl = "https://kemini-kiosk-api.duckdns.org"; 
         
-        // 🔥 서비스에 categoryName을 함께 전달합니다.
         List<MenuResponseDto> top3 = statisticsService.getTop3Menus(categoryName, baseUrl);
         
         return ApiResponse.success(top3);

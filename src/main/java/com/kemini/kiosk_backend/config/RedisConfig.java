@@ -1,6 +1,5 @@
 package com.kemini.kiosk_backend.config;
 
-// 1. 핵심 Jackson 임포트 (반드시 com.fasterxml 버전이어야 함)
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;

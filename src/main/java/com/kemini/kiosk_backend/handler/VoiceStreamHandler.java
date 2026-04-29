@@ -85,7 +85,7 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
                                 List<OrderParserService.OrderResult> orders = orderParserService.parseMultiOrder(sessionId, transcript, baseUrl);
 
                                 if (!orders.isEmpty()) {
-                                    // 🔥 [장바구니 로직 실행]
+                                    // [장바구니 로직 실행]
                                     // 확신이 있는 주문(Direct Match)은 여기서 즉시 장바구니 CRUD를 수행합니다.
                                     for (OrderParserService.OrderResult order : orders) {
                                         // 확인 모달이 필요한 경우나 알 수 없는 경우는 장바구니 처리를 건너뜁니다.
@@ -108,7 +108,7 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
                                         }
                                     }
 
-                                    // 🔥 [핵심 수정] 모든 분석 결과를 '보따리(JSON)'로 묶어서 프론트에 딱 한 번만 보냅니다.
+                                    // 모든 분석 결과를 '보따리(JSON)'로 묶어서 프론트에 딱 한 번만 보냅니다.
                                     // 이렇게 해야 프론트가 큐를 쌓아서 하나씩 모달을 띄울 수 있습니다.
                                     String ordersJson = objectMapper.writeValueAsString(orders);
                                     session.sendMessage(new TextMessage("SYSTEM:PROCESS_ORDERS:" + ordersJson));

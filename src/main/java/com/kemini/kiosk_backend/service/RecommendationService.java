@@ -36,7 +36,7 @@ public class RecommendationService {
                 return Collections.emptyList();
             }
 
-            // 1. 🔥 [상대적 필터링 로직]
+            // 1. [상대적 필터링 로직]
             // 파이썬 엔진에서 이미 정렬해서 보내주므로, 첫 번째 요소가 최고점입니다.
             double maxScore = response.recommendations().get(0).score();
             log.info("🎯 AI 추천 최고점: {}, 필터 기준점(max - 0.05): {}", maxScore, (maxScore - 0.05));

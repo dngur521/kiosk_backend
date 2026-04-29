@@ -33,13 +33,13 @@ public class MenuController {
         return ApiResponse.success("메뉴가 생성되었습니다.", menuService.saveMenu(dto));
     }
 
-    // 🔥 [수정] @RequestParam("categoryId") 추가
+    // 메뉴 추가
     @GetMapping
     public ApiResponse<List<MenuResponseDto>> getMenus(@RequestParam(value = "categoryId", required = false) Long categoryId) {
         return ApiResponse.success(menuService.getMenus(categoryId));
     }
 
-    // 🔥 [수정] @PathVariable("id") 추가
+    // 메뉴 수정
     @PutMapping(value = "/{id}", consumes = {"multipart/form-data"})
     public ApiResponse<MenuResponseDto> updateMenu(
             @PathVariable("id") Long id, 
@@ -48,7 +48,7 @@ public class MenuController {
         return ApiResponse.success("메뉴가 성공적으로 수정되었습니다.", menuService.updateMenu(id, dto));
     }
 
-    // 🔥 [수정] @PathVariable("id") 추가
+    // 메뉴 삭제
     @DeleteMapping("/{id}")
     public ApiResponse<Void> deleteMenu(@PathVariable("id") Long id) {
         menuService.deleteMenu(id);

@@ -29,8 +29,6 @@ public class OrderParserService {
     private final CancelResolverService cancelResolverService;
     private final PronounResolverService pronounResolverService;
     private final OrderContextService orderContextService;
-    
-    // 🔥 [추가] 고성능 AI 추천 엔진 서비스
     private final RecommendationService recommendationService;
 
     @Transactional(readOnly = true)
@@ -109,10 +107,10 @@ public class OrderParserService {
         if (results.isEmpty()) {
             log.info("❓ 직접 매칭 실패 -> 하이브리드 추천 단계 진입");
             
-            // 1단계: 파이썬 AI 시맨틱 서치 시도 (0.85점 필터링 로직 포함됨)
+            // 1단계: 파이썬 AI 시맨틱 서치 시도
             List<MenuResponseDto> suggestions = recommendationService.getSemanticRecommendations(semanticQuery);
 
-            // 2단계: AI 결과가 없을 경우, 기존의 레벤슈타인 거리 기반 유사도 로직으로 백업 (우혁님 로직 보존)
+            // 2단계: AI 결과가 없을 경우, 기존의 레벤슈타인 거리 기반 유사도 로직으로 백업 (기존 로직 보존)
             if (suggestions.isEmpty()) {
                 log.info("⚠️ AI 추천 결과 없음 (Query: {}) -> 레벤슈타인 백업 가동", semanticQuery);
                 suggestions = candidates.stream()
@@ -135,9 +133,7 @@ public class OrderParserService {
         return results;
     }
 
-    /**
-     * [보존] 레벤슈타인 거리를 활용한 문자열 유사도 계산
-     */
+    //레벤슈타인 거리를 활용한 문자열 유사도 계산
     private double calculateSimilarity(String s1, String s2) {
         int distance = getLevenshteinDistance(s1, s2);
         int maxLength = Math.max(s1.length(), s2.length());
@@ -162,7 +158,7 @@ public class OrderParserService {
         return d[n][m];
     }
 
-    // --- 내부 구조 동일 ---
+
     @AllArgsConstructor
     private static class MenuMatch {
         Menu menu;

@@ -20,8 +20,8 @@ public class MenuLearningService {
     private final MenuRepository menuRepository;
     private final MenuSynonymRepository synonymRepository;
     private final QuantityResolverService quantityResolverService;
-    private final CartService cartService; // 🔥 장바구니 직접 수정을 위해 추가
-    private final OrderContextService orderContextService; // 🔥 맥락 공유를 위해 추가!
+    private final CartService cartService;
+    private final OrderContextService orderContextService;
 
     @Transactional
     public int learnAndAddToCart(String sessionId, LearningRequestDto request) {
@@ -31,7 +31,7 @@ public class MenuLearningService {
         // 1. 띄어쓰기 기준 분리
         String[] parts = rawText.split("\\s+");
         
-        // 2. 🔥 [핵심] 어디서부터 수량인지 경계선 찾기
+        // 2. 어디서부터 수량인지 경계선 찾기
         int splitIdx = parts.length; // 기본값은 전체를 메뉴명으로 간주
         for (int i = 0; i < parts.length; i++) {
             // 단어 하나가 수량으로 해석되는지 확인 (예: "하나", "두", "1")
@@ -41,7 +41,7 @@ public class MenuLearningService {
             }
         }
 
-        // 3. 🔥 메뉴 이름 합치기 (수량 전까지 모든 단어)
+        // 3. 메뉴 이름 합치기 (수량 전까지 모든 단어)
         // 예: "달콤한 빵 하나 줘" -> splitIdx는 2 (단어 "하나"의 위치)
         // synonymToLearn -> "달콤한 빵"
         StringBuilder sb = new StringBuilder();
@@ -59,7 +59,7 @@ public class MenuLearningService {
             log.info("🎓 신규 시노님 학습 완료: [{}]", synonymForMatch);
         }
 
-        // 5. 🔥 남은 텍스트(수량 부분)에서 수량 맥락 추출
+        // 5. 남은 텍스트(수량 부분)에서 수량 맥락 추출
         int quantity = 1;
         if (splitIdx < parts.length) {
             // splitIdx부터 끝까지 합쳐서 수량 분석 (예: "하나 줘")
