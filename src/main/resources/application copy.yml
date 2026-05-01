@@ -27,6 +27,5 @@ spring:
       host: localhost
       port: 6373 # 요청하신 Redis 포트 6373 반영
 
-
-# 외부 API (추후 설정)
-# google-cloud-stt-api-key: ...
+app:
+  base-url: 실제-URL로-수정
