@@ -2,6 +2,7 @@ package com.kemini.kiosk_backend.controller;
 
 import java.util.List;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -23,12 +24,13 @@ public class OrderStatisticsController {
 
     private final OrderStatisticsService statisticsService;
 
+    @Value("${app.base-url}")
+    private String baseUrl;
+
     // 1. TOP 3 메뉴 조회 (필터링 기능 추가)
     @GetMapping("/top3")
     public ApiResponse<List<MenuResponseDto>> getTop3Menus(
             @RequestParam(value = "categoryName", required = false) String categoryName) {
-        
-        String baseUrl = "https://kemini-kiosk-api.duckdns.org"; 
         
         List<MenuResponseDto> top3 = statisticsService.getTop3Menus(categoryName, baseUrl);
         

@@ -8,9 +8,9 @@ spring:
     username: kemini
     password: # 실제 설정한 비밀번호로 변경하세요
     driver-class-name: org.mariadb.jdbc.Driver
-  sql:
-    init:
-      mode: always # 서버 실행 시마다 data.sql 실행
+  # sql:
+  #  init:
+  #    mode: always # 서버 실행 시마다 data.sql 실행
   # JPA 설정
   jpa:
     hibernate:

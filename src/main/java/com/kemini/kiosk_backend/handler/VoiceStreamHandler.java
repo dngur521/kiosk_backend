@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.CloseStatus;
@@ -41,7 +42,10 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
     private final Map<String, ClientStream<StreamingRecognizeRequest>> sttStreams = new ConcurrentHashMap<>();
     private final Map<String, SpeechClient> speechClients = new ConcurrentHashMap<>();
     
-    private final OrderParserService orderParserService; 
+    @Value("${app.base-url}")
+    private String baseUrl;
+
+    private final OrderParserService orderParserService;
     private final CartService cartService;
     private final CancelResolverService cancelResolverService;
     private final ObjectMapper objectMapper;
@@ -79,8 +83,7 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
                             if (isFinal) {
                                 log.info("🏁 최종 문장 인식: {}", transcript);
                                 String sessionId = session.getId();
-                                String baseUrl = "https://kemini-kiosk-api.duckdns.org"; 
-                                
+
                                 // 1. 파서에서 분석 결과 리스트를 가져옵니다.
                                 List<OrderParserService.OrderResult> orders = orderParserService.parseMultiOrder(sessionId, transcript, baseUrl);
 

@@ -4,6 +4,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
@@ -24,7 +25,8 @@ public class RecommendationService {
     private final MenuRepository menuRepository;
     private final RestTemplate restTemplate = new RestTemplate();
     private final String PYTHON_SERVER_URL = "http://localhost:8000/recommend";
-    private final String BASE_URL = "https://kemini-kiosk-api.duckdns.org";
+    @Value("${app.base-url}")
+    private String baseUrl;
 
     public List<MenuResponseDto> getSemanticRecommendations(String query) {
         try {
@@ -57,7 +59,7 @@ public class RecommendationService {
                                 .filter(m -> m.getId().equals(aiInfo.id()))
                                 .findFirst()
                                 .orElse(null);
-                        return menu != null ? new MenuResponseDto(menu, BASE_URL) : null;
+                        return menu != null ? new MenuResponseDto(menu, baseUrl) : null;
                     })
                     .filter(Objects::nonNull)
                     .toList();

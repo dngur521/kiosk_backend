@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -31,7 +32,8 @@ public class MenuService {
     private final MenuCategoryRepository categoryRepository;
 
     private final String UPLOAD_DIR = System.getProperty("user.home") + File.separator + "kiosk_uploads" + File.separator + "menu" + File.separator;
-    private final String BASE_URL = "https://kemini-kiosk-api.duckdns.org";
+    @Value("${app.base-url}")
+    private String baseUrl;
 
     private final String DEFAULT_IMAGE = "no-image.jpg";
     @Transactional
@@ -54,7 +56,7 @@ public class MenuService {
                 .category(category)
                 .build();
 
-        return new MenuResponseDto(menuRepository.save(menu), BASE_URL);
+        return new MenuResponseDto(menuRepository.save(menu), baseUrl);
     }
 
     public List<MenuResponseDto> getMenus(Long categoryId) {
@@ -63,7 +65,7 @@ public class MenuService {
                 : menuRepository.findByCategoryIdOrderByIdAsc(categoryId);
         
         return menus.stream()
-                .map(m -> new MenuResponseDto(m, BASE_URL))
+                .map(m -> new MenuResponseDto(m, baseUrl))
                 .collect(Collectors.toList());
     }
 
@@ -107,7 +109,7 @@ public class MenuService {
         if (dto.getSemanticContext() != null) menu.setSemanticContext(dto.getSemanticContext());
 
         // 저장 후 결과 반환 (JPA 변경 감지로 인해 별도의 save 호출 불필요)
-        return new MenuResponseDto(menu, BASE_URL);
+        return new MenuResponseDto(menu, baseUrl);
     }
 
     @Transactional

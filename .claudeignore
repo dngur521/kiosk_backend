@@ -1,0 +1,18 @@
+# 전부 무시
+
+-
+
+# 필요한 것만 허용
+
+!src/
+!build.gradle
+!settings.gradle
+!gradlew
+!gradlew.bat
+!gradle/wrapper/
+
+# (선택) 설정 파일
+
+!src/main/resources/
+
+src/main/resources/application.yml
