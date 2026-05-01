@@ -56,6 +56,11 @@ public class OrderParserService {
         List<MenuMatch> matches = new ArrayList<>();
 
         for (MenuCandidate cand : candidates) {
+
+            if (cand.text.isEmpty()) {
+                log.warn("⚠️ 비어있는 이름의 메뉴/시노님 발견! ID: {}", cand.menu.getId());
+                continue;
+            }
             int idx = cleanInput.indexOf(cand.text);
             while (idx != -1) {
                 boolean isAlreadyOccupied = false;
@@ -70,6 +75,7 @@ public class OrderParserService {
                 idx = cleanInput.indexOf(cand.text, idx + 1);
             }
         }
+        log.info("✅ Greedy Match 완료 - 매칭 개수: {}", matches.size());
 
         // --- [기존 로직 3] 매칭 결과 처리 (유지) ---
         if (!matches.isEmpty()) {
@@ -83,8 +89,10 @@ public class OrderParserService {
                 Integer qty = quantityResolverService.resolveQuantity(subText);
                 boolean isCancel = cancelResolverService.hasCancelKeyword(subText);
                 boolean isMenuAllCancel = cancelResolverService.isAllCancelRequest(subText);
-                
+
+                log.info("💾 Redis 컨텍스트 업데이트 시도 중... 세션: {}", sessionId);
                 orderContextService.updateContext(sessionId, current.menu.getId());
+                log.info("✅ Redis 업데이트 완료!");
                 results.add(new OrderResult(new MenuResponseDto(current.menu, baseUrl), (qty == null ? 1 : qty), isCancel, isMenuAllCancel, false, false, null, current.isSynonym));
             }
         } else {
@@ -109,6 +117,7 @@ public class OrderParserService {
             
             // 1단계: 파이썬 AI 시맨틱 서치 시도
             List<MenuResponseDto> suggestions = recommendationService.getSemanticRecommendations(semanticQuery);
+            log.info("🎯 AI 추천 서버 응답 완료 - 추천 개수: {}", suggestions.size());
 
             // 2단계: AI 결과가 없을 경우, 기존의 레벤슈타인 거리 기반 유사도 로직으로 백업 (기존 로직 보존)
             if (suggestions.isEmpty()) {
