@@ -15,6 +15,7 @@
 | 세션 / 캐시 | Redis (Lettuce) |
 | 음성 인식 | Google Cloud Speech-to-Text (ko-KR) |
 | AI 추천 | Python 의미 검색 서버 (FastAPI 등) |
+| 립리딩 | Python 비전 서버 (MediaPipe 기반) |
 | 빌드 도구 | Gradle |
 
 ---
@@ -28,6 +29,7 @@
 | MariaDB | `localhost:3303` | 메인 DB (`keminikiosk`) |
 | Redis | `localhost:6373` | 장바구니 · 주문 컨텍스트 세션 |
 | Python AI 서버 | `http://localhost:8000` | 의미 기반 메뉴 추천 |
+| Python 비전 서버 | `app.vision-server-url` (ngrok) | 립리딩 분석 |
 | Google Cloud 인증키 | `/home/kambook/google-key.json` | 음성 인식 |
 
 ### 빌드 및 실행
@@ -65,13 +67,22 @@
 5. Levenshtein 폴백  — 편집 거리 기반 근사 매칭 (score > 0.3)
 ```
 
-### 2. 음성 주문
+### 2. 음성 주문 + 립리딩 융합
 
 `/ws/voice` WebSocket으로 오디오를 수신합니다.
 
 - 클라이언트: 마이크 오디오를 16kHz PCM 바이너리 프레임으로 전송
 - 서버: Google Cloud STT 스트리밍 인식 → `isFinal=true` 수신 시 주문 파싱 실행
-- 결과: `SYSTEM:PROCESS_ORDERS:{JSON}` 형태로 프론트에 전송
+- STT confidence 기준 분기:
+  - **confidence ≥ 0.8** → 즉시 장바구니 추가, 비전 서버 호출 없음
+  - **confidence < 0.8** → `SYSTEM:LIPREADING_ANALYZING` 전송, 비전 서버에 프레임 전달 후 콜백 대기
+
+`/ws/lipreading` WebSocket으로 카메라 프레임을 수신합니다.
+
+- 카메라가 켜져 있는 동안 상시 연결 유지 (15fps, 최대 75프레임 버퍼)
+- STT 저신뢰도 시 버퍼 프레임 → 비전 서버 `/ws/camera`로 전달
+- 비전 서버 콜백(`POST /api/lipreading/result`) 수신 시 STT + 립리딩 모음 유사도 융합 → 장바구니 추가
+- 결과: `SYSTEM:LIPREADING_MATCH:{id}:{name}:{score}` 형태로 프론트에 전송
 
 ### 3. 실시간 학습
 
@@ -131,7 +142,9 @@ POST /api/learning  { "text": "달콤한 빵 하나", "menuId": 5 }
 | `POST` | `/api/ai/recommend` | AI 메뉴 추천 |
 | `GET` | `/api/statistics/top3` | 주문 TOP3 (`?categoryName=` 옵션) |
 | `POST` | `/api/statistics/order` | 주문 통계 기록 |
+| `POST` | `/api/lipreading/result` | 비전 서버 립리딩 콜백 수신 |
 | `WS` | `/ws/voice` | 음성 스트리밍 |
+| `WS` | `/ws/lipreading` | 카메라 프레임 스트리밍 (립리딩용) |
 
 ---
 
@@ -163,4 +176,5 @@ spring:
 
 app:
   base-url: https://kemini-kiosk-api.duckdns.org
+  vision-server-url: https://<ngrok-주소>  # 비전 서버 ngrok URL
 ```

@@ -4,6 +4,7 @@ import java.io.FileInputStream;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletableFuture;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -11,6 +12,8 @@ import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
+import org.springframework.web.socket.client.standard.StandardWebSocketClient;
+import org.springframework.web.socket.handler.AbstractWebSocketHandler;
 import org.springframework.web.socket.handler.BinaryWebSocketHandler;
 
 import com.google.api.gax.core.FixedCredentialsProvider;
@@ -28,7 +31,10 @@ import com.google.cloud.speech.v1.StreamingRecognizeResponse;
 import com.google.protobuf.ByteString;
 import com.kemini.kiosk_backend.service.CancelResolverService;
 import com.kemini.kiosk_backend.service.CartService;
+import com.kemini.kiosk_backend.service.FrameBufferService;
+import com.kemini.kiosk_backend.service.LipReadingSessionContext;
 import com.kemini.kiosk_backend.service.OrderParserService;
+import org.springframework.web.client.RestTemplate;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -45,10 +51,16 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
     @Value("${app.base-url}")
     private String baseUrl;
 
+    @Value("${app.vision-server-url}")
+    private String visionServerUrl;
+
     private final OrderParserService orderParserService;
     private final CartService cartService;
     private final CancelResolverService cancelResolverService;
     private final ObjectMapper objectMapper;
+    private final LipReadingSessionContext lipReadingSessionContext;
+    private final FrameBufferService frameBufferService;
+    private final RestTemplate restTemplate = new RestTemplate();
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
@@ -84,39 +96,41 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
                                 log.info("🏁 최종 문장 인식: {}", transcript);
                                 String sessionId = session.getId();
 
+                                float confidence = result.getAlternativesList().get(0).getConfidence();
+                                lipReadingSessionContext.store(session, transcript, confidence);
+
                                 // 1. 파서에서 분석 결과 리스트를 가져옵니다.
                                 List<OrderParserService.OrderResult> orders = orderParserService.parseMultiOrder(sessionId, transcript, baseUrl);
 
                                 if (!orders.isEmpty()) {
-                                    // [장바구니 로직 실행]
-                                    // 확신이 있는 주문(Direct Match)은 여기서 즉시 장바구니 CRUD를 수행합니다.
-                                    for (OrderParserService.OrderResult order : orders) {
-                                        // 확인 모달이 필요한 경우나 알 수 없는 경우는 장바구니 처리를 건너뜁니다.
-                                        if (order.isUnknown() || order.isLearnedMatch()) continue;
-
-                                        // 전체 비우기 처리
-                                        if (order.isAllCancel()) {
-                                            cartService.clearCart(sessionId);
-                                        } 
-                                        // 일반 주문/취소 처리
-                                        else if (order.getMenuDto() != null) {
-                                            Long menuId = order.getMenuDto().getId();
-                                            if (order.isMenuAllCancel()) {
-                                                cartService.removeFromCart(sessionId, menuId);
-                                            } else if (order.isCancel()) {
-                                                cartService.updateQuantity(sessionId, menuId, -order.getQuantity());
-                                            } else if (order.getQuantity() > 0) {
-                                                addToCart(sessionId, order.getMenuDto(), order.getQuantity());
+                                    if (confidence >= 1.1f) { // TODO 테스트용 — 실서비스 전 0.8f로 복원
+                                        // [고신뢰도] 립리딩 서버 호출 없이 즉시 처리합니다.
+                                        for (OrderParserService.OrderResult order : orders) {
+                                            if (order.isUnknown() || order.isLearnedMatch()) continue;
+                                            if (order.isAllCancel()) {
+                                                cartService.clearCart(sessionId);
+                                            } else if (order.getMenuDto() != null) {
+                                                Long menuId = order.getMenuDto().getId();
+                                                if (order.isMenuAllCancel()) {
+                                                    cartService.removeFromCart(sessionId, menuId);
+                                                } else if (order.isCancel()) {
+                                                    cartService.updateQuantity(sessionId, menuId, -order.getQuantity());
+                                                } else if (order.getQuantity() > 0) {
+                                                    addToCart(sessionId, order.getMenuDto(), order.getQuantity());
+                                                }
                                             }
                                         }
+                                        String ordersJson = objectMapper.writeValueAsString(orders);
+                                        session.sendMessage(new TextMessage("SYSTEM:PROCESS_ORDERS:" + ordersJson));
+                                        log.info("📦 고신뢰도 주문 즉시 처리 완료 ({}건, confidence={})", orders.size(), confidence);
+                                    } else {
+                                        // [저신뢰도] 버퍼 프레임을 Python에 전달 후 콜백 대기합니다.
+                                        lipReadingSessionContext.storePendingOrders(orders);
+                                        List<byte[]> frames = frameBufferService.drainFrames();
+                                        sendFramesToPython(transcript, confidence, frames);
+                                        session.sendMessage(new TextMessage("SYSTEM:LIPREADING_ANALYZING"));
+                                        log.info("🔍 저신뢰도({}), 립리딩 분석 요청 ({}건, 프레임={})", confidence, orders.size(), frames.size());
                                     }
-
-                                    // 모든 분석 결과를 '보따리(JSON)'로 묶어서 프론트에 딱 한 번만 보냅니다.
-                                    // 이렇게 해야 프론트가 큐를 쌓아서 하나씩 모달을 띄울 수 있습니다.
-                                    String ordersJson = objectMapper.writeValueAsString(orders);
-                                    session.sendMessage(new TextMessage("SYSTEM:PROCESS_ORDERS:" + ordersJson));
-                                    
-                                    log.info("📦 복합 주문 처리 및 전송 완료 ({}건)", orders.size());
                                 }
                             }
                         } catch (Exception e) { 
@@ -173,6 +187,42 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
         cleanup(session.getId());
+    }
+
+    private void sendFramesToPython(String text, float confidence, List<byte[]> frames) {
+        CompletableFuture.runAsync(() -> {
+            try {
+                // 1. STT 정보를 REST로 먼저 전달
+                Map<String, Object> body = Map.of("text", text, "confidence", confidence);
+                restTemplate.postForObject(visionServerUrl + "/stt", body, String.class);
+                log.info("Python STT 알림 전송 완료: {}", text);
+
+                if (frames.isEmpty()) {
+                    log.warn("전송할 프레임 없음 — 카메라 버퍼 비어있음");
+                    return;
+                }
+
+                // 2. Python /ws/camera WebSocket에 연결해서 프레임 전송
+                StandardWebSocketClient wsClient = new StandardWebSocketClient();
+                String wsUrl = visionServerUrl.replaceFirst("^https", "wss")
+                                              .replaceFirst("^http", "ws") + "/ws/camera";
+
+                WebSocketSession pySession = wsClient.execute(
+                    new AbstractWebSocketHandler() {},
+                    wsUrl
+                ).get();
+
+                for (byte[] frame : frames) {
+                    if (pySession.isOpen()) {
+                        pySession.sendMessage(new BinaryMessage(frame));
+                    }
+                }
+                pySession.close();
+                log.info("Python 카메라 WebSocket 프레임 전송 완료: {}프레임", frames.size());
+            } catch (Exception e) {
+                log.warn("Python 프레임 전송 실패 (무시): {}", e.getMessage());
+            }
+        });
     }
 
     private void cleanup(String sessionId) {

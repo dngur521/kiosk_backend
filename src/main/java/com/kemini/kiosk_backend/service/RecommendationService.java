@@ -31,20 +31,23 @@ public class RecommendationService {
     public List<MenuResponseDto> getSemanticRecommendations(String query) {
         try {
             RecommendationRequest request = new RecommendationRequest(query);
-            RecommendationResponse response = restTemplate.postForObject(
-                    PYTHON_SERVER_URL, request, RecommendationResponse.class);
+            // Python 서버가 배열([]) 형태로 직접 반환
+            RecommendationResponse.MenuInfo[] results = restTemplate.postForObject(
+                    PYTHON_SERVER_URL, request, RecommendationResponse.MenuInfo[].class);
 
-            if (response == null || response.recommendations() == null || response.recommendations().isEmpty()) {
+            if (results == null || results.length == 0) {
                 return Collections.emptyList();
             }
 
+            List<RecommendationResponse.MenuInfo> recommendations = List.of(results);
+
             // 1. [상대적 필터링 로직]
             // 파이썬 엔진에서 이미 정렬해서 보내주므로, 첫 번째 요소가 최고점입니다.
-            double maxScore = response.recommendations().get(0).score();
+            double maxScore = recommendations.get(0).score();
             log.info("🎯 AI 추천 최고점: {}, 필터 기준점(max - 0.05): {}", maxScore, (maxScore - 0.05));
 
             // 최고점과의 차이가 0.05 이내인 메뉴만 필터링
-            List<RecommendationResponse.MenuInfo> filteredAiResults = response.recommendations().stream()
+            List<RecommendationResponse.MenuInfo> filteredAiResults = recommendations.stream()
                     .filter(m -> m.score() >= 0.5 && m.score() >= (maxScore - 0.05))
                     .toList();
 

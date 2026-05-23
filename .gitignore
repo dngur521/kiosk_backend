@@ -44,3 +44,5 @@ src/main/resources/application.yml
 memo.txt
 
 CLAUDE.md
+notion.md
+*.png

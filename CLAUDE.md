@@ -106,7 +106,7 @@ Server runs on port **8727**. Requires MariaDB on `localhost:3303` and Redis on 
 | `dto/`               | Request/response DTOs                           |
 | `config/`            | Redis, WebSocket, Web (CORS) config             |
 | `global/`            | `ApiResponse` wrapper, global exception handler |
-| `handler/`           | `VoiceStreamHandler` — WebSocket binary frames  |
+| `handler/`           | `VoiceStreamHandler`, `LipReadingFrameHandler` — WebSocket binary frames |
 
 ### NLP Order Parsing Pipeline (`OrderParserService`)
 
@@ -131,6 +131,22 @@ Everything is keyed by `sessionId` (from WebSocket session or `X-Session-ID` hea
 
 `/ws/voice` WebSocket receives raw audio (LINEAR16, 16kHz), streams to Google Cloud STT (`ko-KR`), and on final transcript calls `OrderParserService` then `CartService`. Credentials at `/home/kambook/google-key.json`.
 
+### Lip-Reading Flow
+
+Camera frames from React are buffered in Spring Boot, then forwarded to the vision server when STT confidence is low.
+
+1. React connects to `/ws/lipreading` (persistent, stays open while camera is on)
+2. `LipReadingFrameHandler` stores binary frames in `FrameBufferService` (circular buffer, max 75 frames = 15fps × 5s)
+3. On STT final result:
+   - **confidence ≥ 0.8** → cart add immediately, vision server not called
+   - **confidence < 0.8** → drain buffer, POST `/stt` to vision server, open WebSocket to `visionServerUrl/ws/camera`, send buffered frames, close
+4. Vision server analyzes frames → `POST /api/lipreading/result` callback
+5. `LipReadingService` fuses STT vowels + lip vowels (Levenshtein similarity) → cart add + `SYSTEM:LIPREADING_MATCH:{id}:{name}:{score}` to React
+
+Vision server URL configured via `app.vision-server-url` in `application.yml` — do not hardcode.
+
+**Note:** `VoiceStreamHandler.java` currently has threshold set to `1.1f` for testing (forces all STT through lip-reading path). Restore to `0.8f` before production.
+
 ### Learning Flow
 
 `POST /api/learning` — user provides free-form text + `menuId`. `MenuLearningService` splits by spaces, identifies quantity token, stores the remainder as a new `MenuSynonym` (stripped of spaces), and immediately adds to cart.
@@ -153,8 +169,9 @@ The base URL is configured via `app.base-url` in `application.yml` and injected 
 | ---------------- | ----------------------- | ----------------------------- |
 | MariaDB          | `localhost:3303`        | Primary DB (`keminikiosk`)    |
 | Redis            | `localhost:6373`        | Cart + order context sessions |
-| Python AI server | `http://localhost:8000` | Semantic menu recommendations |
-| Google Cloud STT | GCP API                 | Korean voice recognition      |
+| Python AI server    | `http://localhost:8000`    | Semantic menu recommendations |
+| Python vision server | `app.vision-server-url` (ngrok) | Lip-reading analysis |
+| Google Cloud STT | GCP API                    | Korean voice recognition      |
 
 ## Commit Message Convention
 
