@@ -139,6 +139,8 @@ Everything is keyed by `sessionId` (from WebSocket session or `X-Session-ID` hea
 
 Menu images: UUID-prefixed filenames stored at `~/kiosk_uploads/menu/`. Served from `https://kemini-kiosk-api.duckdns.org/uploads/menu/{imageName}`.
 
+The base URL is configured via `app.base-url` in `application.yml` and injected with `@Value("${app.base-url}")` — do not hardcode it in service/controller classes.
+
 ## Key Entity Relationships
 
 - `MenuCategory` 1→N `Menu` 1→N `MenuSynonym`
@@ -153,3 +155,17 @@ Menu images: UUID-prefixed filenames stored at `~/kiosk_uploads/menu/`. Served f
 | Redis            | `localhost:6373`        | Cart + order context sessions |
 | Python AI server | `http://localhost:8000` | Semantic menu recommendations |
 | Google Cloud STT | GCP API                 | Korean voice recognition      |
+
+## Commit Message Convention
+
+Format: `{emoji} {type}: {description (한국어, 한 줄)`
+
+| Type | Emoji | 용도 |
+|------|-------|------|
+| `feat` | ✨ | 새 기능 |
+| `fix` | 🐛 | 버그 수정 |
+| `docs` | 📝 | 문서 작성·수정 |
+| `refactor` | ♻️ | 기능 변경 없는 코드 개선 |
+| `chore` | 🔧 | 빌드·설정·의존성 변경 |
+
+Example: `✨ feat: 음성 주문 취소 기능 추가`
