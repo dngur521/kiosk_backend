@@ -72,17 +72,29 @@
 `/ws/voice` WebSocket으로 오디오를 수신합니다.
 
 - 클라이언트: 마이크 오디오를 16kHz PCM 바이너리 프레임으로 전송
-- 서버: Google Cloud STT 스트리밍 인식 → `isFinal=true` 수신 시 주문 파싱 실행
-- STT confidence 기준 분기:
-  - **confidence ≥ 0.8** → 즉시 장바구니 추가, 비전 서버 호출 없음
-  - **confidence < 0.8** → `SYSTEM:LIPREADING_ANALYZING` 전송, 비전 서버에 프레임 전달 후 콜백 대기
+- 서버: Google Cloud STT 스트리밍 인식 (`singleUtterance=true`) → `isFinal=true` 수신 시 주문 파싱 후 아래 3경로 중 하나로 분기
+
+**NLP 결과 × STT confidence 분기 로직:**
+
+| NLP 결과 (`hasRealOrder`) | confidence | 처리 경로 |
+|---|---|---|
+| 실제 주문 있음 | ≥ 0.6 | **즉시 처리** — 장바구니 추가 + `SYSTEM:PROCESS_ORDERS:{json}` |
+| 실제 주문 있음 | < 0.6 | **교차 검증** — 보류 주문 저장, 카메라 프레임 전달, `SYSTEM:LIPREADING_ANALYZING` |
+| NLP 실패 / Levenshtein만 | 무관 | **립리딩 추천** — 카메라 프레임 전달, `SYSTEM:LIPREADING_ANALYZING` |
+
+> `hasRealOrder`: NLP가 Levenshtein 폴백이나 학습 매칭이 아닌 실제 메뉴+수량 또는 취소 명령을 찾았을 때 `true`
 
 `/ws/lipreading` WebSocket으로 카메라 프레임을 수신합니다.
 
-- 카메라가 켜져 있는 동안 상시 연결 유지 (15fps, 최대 75프레임 버퍼)
-- STT 저신뢰도 시 버퍼 프레임 → 비전 서버 `/ws/camera`로 전달
-- 비전 서버 콜백(`POST /api/lipreading/result`) 수신 시 STT + 립리딩 모음 유사도 융합 → 장바구니 추가
-- 결과: `SYSTEM:LIPREADING_MATCH:{id}:{name}:{score}` 형태로 프론트에 전송
+- 카메라가 켜져 있는 동안 상시 연결 유지 (15fps, 최대 **105프레임 / 7초** 버퍼, 마지막 1초는 자동 제거)
+- 비전 서버 콜백(`POST /api/lipreading/result`) 수신 시 립리딩 모음과 STT 결과 융합
+- 융합 결과에 따른 WebSocket 메시지:
+
+| 메시지 | 의미 |
+|--------|------|
+| `SYSTEM:LIPREADING_MATCH:{id}:{name}:{score}` | 교차 검증 성공 → 자동 장바구니 추가 |
+| `SYSTEM:LIPREADING_CANDIDATES:[{...},...]` | 추천 모드 → 프론트에서 사용자 확인 모달 표시 |
+| `SYSTEM:LIPREADING_FAILED` | 립리딩 유사도 기준 미달 |
 
 ### 3. 실시간 학습
 

@@ -129,23 +129,34 @@ Everything is keyed by `sessionId` (from WebSocket session or `X-Session-ID` hea
 
 ### Voice Flow
 
-`/ws/voice` WebSocket receives raw audio (LINEAR16, 16kHz), streams to Google Cloud STT (`ko-KR`), and on final transcript calls `OrderParserService` then `CartService`. Credentials at `/home/kambook/google-key.json`.
+`/ws/voice` WebSocket receives raw audio (LINEAR16, 16kHz), streams to Google Cloud STT (`ko-KR`, `singleUtterance=true`), and on final transcript calls `OrderParserService` then routes through the lip-reading decision tree. Credentials at `/home/kambook/google-key.json`.
+
+**STT stream lifecycle:** Lazy restart — the stream is NOT proactively restarted after a final result or error. `handleBinaryMessage` starts a new stream only when the next audio chunk arrives and no stream exists. This prevents the `OUT_OF_RANGE: Audio Timeout` infinite loop caused by keeping an empty stream alive. An `AtomicReference<ClientStream>` inside `startSttStream` detects stale `onError`/`onComplete` callbacks (fired by old streams after a new one is already running) and silently drops them.
 
 ### Lip-Reading Flow
 
-Camera frames from React are buffered in Spring Boot, then forwarded to the vision server when STT confidence is low.
+Camera frames from React are buffered in Spring Boot, then forwarded to the vision server depending on STT confidence and NLP outcome.
 
 1. React connects to `/ws/lipreading` (persistent, stays open while camera is on)
-2. `LipReadingFrameHandler` stores binary frames in `FrameBufferService` (circular buffer, max 75 frames = 15fps × 5s)
-3. On STT final result:
-   - **confidence ≥ 0.8** → cart add immediately, vision server not called
-   - **confidence < 0.8** → drain buffer, POST `/stt` to vision server, open WebSocket to `visionServerUrl/ws/camera`, send buffered frames, close
-4. Vision server analyzes frames → `POST /api/lipreading/result` callback
-5. `LipReadingService` fuses STT vowels + lip vowels (Levenshtein similarity) → cart add + `SYSTEM:LIPREADING_MATCH:{id}:{name}:{score}` to React
+2. `LipReadingFrameHandler` stores binary frames in `FrameBufferService` (circular buffer, max **105 frames = 15fps × 7s**; `drainFrames()` drops the last 15 frames / 1s to remove post-utterance silence)
+3. On STT `isFinal=true`, `VoiceStreamHandler` evaluates two dimensions:
+
+   **`hasRealOrder`** — true only when NLP produced at least one actionable result (non-Levenshtein, non-learned-match, with a real menu+quantity or a cancel action):
+
+   | `hasRealOrder` | confidence | Path |
+   |---|---|---|
+   | `true` | ≥ 0.6f | **Direct** — cart add immediately, vision server not called; send `SYSTEM:PROCESS_ORDERS:{json}` |
+   | `true` | < 0.6f | **Cross-validation** — `storePendingOrders`, drain buffer, POST `/stt` to vision server, send frames via WS; send `SYSTEM:LIPREADING_ANALYZING` |
+   | `false` | any | **Recommendation** — NLP failed or Levenshtein-only; drain buffer, send frames; send `SYSTEM:LIPREADING_ANALYZING` |
+
+4. Vision server analyzes frames → `POST /api/lipreading/result` callback → `LipReadingService.processResult(lipVowels)`
+5. `LipReadingService` dispatches based on whether pending orders exist:
+   - **Cross-validation path** (`hasPendingOrders=true`): compare each pending menu's vowels against lip vowels via Levenshtein similarity. If `bestScore ≥ 0.5` → cart add + `SYSTEM:LIPREADING_MATCH:{id}:{name}:{score}`. If `bestOrder == null` (e.g. only Levenshtein orders pending, which are filtered out) → falls back to recommendation path. If `bestScore < 0.5` → `SYSTEM:LIPREADING_FAILED`.
+   - **Recommendation path** (`hasPendingOrders=false`): scan all menus, compute vowel similarity, send TOP 3 as `SYSTEM:LIPREADING_CANDIDATES:[{"id":N,"name":"...","score":0.XX,"quantity":1},...]` for user to confirm.
 
 Vision server URL configured via `app.vision-server-url` in `application.yml` — do not hardcode.
 
-**Note:** `VoiceStreamHandler.java` currently has threshold set to `1.1f` for testing (forces all STT through lip-reading path). Restore to `0.8f` before production.
+**TODO before production:** `VoiceStreamHandler.java` confidence threshold is `0.6f` for testing. Restore to `0.8f` before release.
 
 ### Learning Flow
 
