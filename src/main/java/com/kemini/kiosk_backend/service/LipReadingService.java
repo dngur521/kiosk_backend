@@ -93,8 +93,8 @@ public class LipReadingService {
             return;
         }
         if (bestScore < 0.5) {
-            log.info("립리딩 교차검증 실패 (최고점: {})", String.format("%.2f", bestScore));
-            sendFailed();
+            log.info("립리딩 교차검증 실패 (최고점: {}) — 전체 메뉴 추천으로 전환", String.format("%.2f", bestScore));
+            processRecommendation(normalizedLipVowels);
             return;
         }
 
