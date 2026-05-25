@@ -131,30 +131,11 @@ Everything is keyed by `sessionId` (from WebSocket session or `X-Session-ID` hea
 
 `/ws/voice` WebSocket receives raw audio (LINEAR16, 16kHz), streams to Google Cloud STT (`ko-KR`, `singleUtterance=true`), and on final transcript calls `OrderParserService` then routes based on NLP result + confidence. Credentials at `/home/kambook/google-key.json`.
 
-> **현재 상태 (2026-05-25): 립리딩 비활성화.** 경로 3(저신뢰도 교차검증)과 경로 4의 립리딩 폴백이 주석처리됨.
-> - 활성 경로: `CONFIRM_ORDER`(시노님) · `PROCESS_ORDERS`(고신뢰도) · `AI_CANDIDATES`(AI 추천) · `POPULAR_MENUS`(NLP·AI 전부 실패)
-> - 경로 3(저신뢰도)은 현재 no-op — 아무 메시지도 전송 안 함
-> - 복원 방법은 아래 "Lip-Reading Flow" 섹션 참고
+> **현재 상태 (2026-05-25): 립리딩 활성화.** 4경로 모두 동작 중.
 
 **STT stream lifecycle:** Lazy restart — the stream is NOT proactively restarted after a final result or error. `handleBinaryMessage` starts a new stream only when the next audio chunk arrives and no stream exists. This prevents the `OUT_OF_RANGE: Audio Timeout` infinite loop caused by keeping an empty stream alive. An `AtomicReference<ClientStream>` inside `startSttStream` detects stale `onError`/`onComplete` callbacks (fired by old streams after a new one is already running) and silently drops them.
 
 ### Lip-Reading Flow
-
-> **현재 비활성화 상태.** 아래 복원 체크리스트로 언제든지 다시 켤 수 있음.
-
-#### 복원 체크리스트 (grep `// 립리딩 비활성화`)
-
-| 파일 | 할 일 |
-|------|-------|
-| `handler/LipReadingFrameHandler.java` | `// @Component` → `@Component` |
-| `controller/LipReadingController.java` | `// @RestController`, `// @RequestMapping` 해제 |
-| `service/FrameBufferService.java` | `// @Service` → `@Service` |
-| `service/LipReadingService.java` | `// @Service` → `@Service` |
-| `service/LipReadingSessionContext.java` | `// @Component` → `@Component` |
-| `config/WebSocketConfig.java` | `LipReadingFrameHandler` import·필드·`/ws/lipreading` 등록 해제 |
-| `handler/VoiceStreamHandler.java` | imports·필드·`store()`·교차검증 경로·AI폴백 경로·`sendFramesToPython` 메서드 해제 |
-
----
 
 Camera frames from React are buffered in Spring Boot, then forwarded to the vision server depending on STT confidence and NLP outcome.
 
@@ -170,8 +151,8 @@ Camera frames from React are buffered in Spring Boot, then forwarded to the visi
    |---|---|---|---|---|
    | `true` | `true` | any | **Confirm** — send `SYSTEM:CONFIRM_ORDER:{json}`; frontend shows "맞아요/아니요" modal | ✅ 활성 |
    | `true` | `false` | ≥ 0.6f | **Direct** — cart add immediately; send `SYSTEM:PROCESS_ORDERS:{json}` | ✅ 활성 |
-   | `true` | `false` | < 0.6f | **Cross-validation** — `storePendingOrders`, drain buffer, POST `/stt` to vision server; send `SYSTEM:LIPREADING_ANALYZING` | 🚫 no-op (립리딩 비활성화) |
-   | `false` | — | any | AI 추천 있으면 `SYSTEM:AI_CANDIDATES`; 없으면 `SYSTEM:POPULAR_MENUS` (인기 메뉴 TOP3, `OrderStatisticsService.getTop3Menus()`) | ✅ 활성 |
+   | `true` | `false` | < 0.6f | **Cross-validation** — `storePendingOrders`, drain buffer, POST `/stt` to vision server; send `SYSTEM:LIPREADING_ANALYZING` | ✅ 활성 |
+   | `false` | — | any | AI 추천 있으면 `SYSTEM:AI_CANDIDATES`; 없으면 립리딩 추천 모드 (`SYSTEM:LIPREADING_ANALYZING`) | ✅ 활성 |
 
 4. Vision server analyzes frames → `POST /api/lipreading/result` callback → `LipReadingService.processResult(lipVowels)`
 5. `LipReadingService` dispatches based on whether pending orders exist:

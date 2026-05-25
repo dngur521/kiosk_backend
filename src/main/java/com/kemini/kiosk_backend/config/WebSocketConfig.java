@@ -1,6 +1,6 @@
 package com.kemini.kiosk_backend.config;
 
-// import com.kemini.kiosk_backend.handler.LipReadingFrameHandler; // 립리딩 비활성화
+import com.kemini.kiosk_backend.handler.LipReadingFrameHandler;
 import com.kemini.kiosk_backend.handler.VoiceStreamHandler;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
@@ -16,7 +16,7 @@ import org.springframework.web.socket.server.standard.ServletServerContainerFact
 public class WebSocketConfig implements WebSocketConfigurer {
 
     private final VoiceStreamHandler voiceStreamHandler;
-    // private final LipReadingFrameHandler lipReadingFrameHandler; // 립리딩 비활성화
+    private final LipReadingFrameHandler lipReadingFrameHandler;
 
     @Bean
     public ServletServerContainerFactoryBean createWebSocketContainer() {
@@ -30,7 +30,7 @@ public class WebSocketConfig implements WebSocketConfigurer {
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
         registry.addHandler(voiceStreamHandler, "/ws/voice")
                 .setAllowedOrigins("*");
-        // registry.addHandler(lipReadingFrameHandler, "/ws/lipreading") // 립리딩 비활성화
-        //         .setAllowedOrigins("*");
+        registry.addHandler(lipReadingFrameHandler, "/ws/lipreading")
+                .setAllowedOrigins("*");
     }
 }

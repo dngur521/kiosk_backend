@@ -16,7 +16,7 @@ import com.kemini.kiosk_backend.dto.response.CartItem;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
-// @Service // 립리딩 비활성화
+@Service
 @RequiredArgsConstructor
 @Slf4j
 public class LipReadingService {

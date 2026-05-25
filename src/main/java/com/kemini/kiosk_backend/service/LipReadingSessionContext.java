@@ -10,7 +10,7 @@ import org.springframework.web.socket.WebSocketSession;
  * 키오스크는 단일 사용자이므로 volatile 필드로 현재 세션 컨텍스트를 공유.
  * STT 완료 시 VoiceStreamHandler가 저장, 립리딩 콜백 시 LipReadingService가 읽음.
  */
-// @Component // 립리딩 비활성화
+@Component
 public class LipReadingSessionContext {
 
     private volatile WebSocketSession session;

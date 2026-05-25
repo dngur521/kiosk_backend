@@ -13,8 +13,8 @@ import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
-// import org.springframework.web.socket.client.standard.StandardWebSocketClient; // 립리딩 비활성화
-// import org.springframework.web.socket.handler.AbstractWebSocketHandler; // 립리딩 비활성화
+import org.springframework.web.socket.client.standard.StandardWebSocketClient;
+import org.springframework.web.socket.handler.AbstractWebSocketHandler;
 import org.springframework.web.socket.handler.BinaryWebSocketHandler;
 
 import com.google.api.gax.core.FixedCredentialsProvider;
@@ -32,11 +32,10 @@ import com.google.cloud.speech.v1.StreamingRecognizeResponse;
 import com.google.protobuf.ByteString;
 import com.kemini.kiosk_backend.service.CancelResolverService;
 import com.kemini.kiosk_backend.service.CartService;
-// import com.kemini.kiosk_backend.service.FrameBufferService; // 립리딩 비활성화
-// import com.kemini.kiosk_backend.service.LipReadingSessionContext; // 립리딩 비활성화
+import com.kemini.kiosk_backend.service.FrameBufferService;
+import com.kemini.kiosk_backend.service.LipReadingSessionContext;
 import com.kemini.kiosk_backend.service.OrderParserService;
-import com.kemini.kiosk_backend.service.OrderStatisticsService;
-// import org.springframework.web.client.RestTemplate; // 립리딩 비활성화
+import org.springframework.web.client.RestTemplate;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -53,17 +52,16 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
     @Value("${app.base-url}")
     private String baseUrl;
 
-    // @Value("${app.vision-server-url}") // 립리딩 비활성화
-    // private String visionServerUrl;
+    @Value("${app.vision-server-url}")
+    private String visionServerUrl;
 
     private final OrderParserService orderParserService;
     private final CartService cartService;
     private final CancelResolverService cancelResolverService;
     private final ObjectMapper objectMapper;
-    private final OrderStatisticsService orderStatisticsService;
-    // private final LipReadingSessionContext lipReadingSessionContext; // 립리딩 비활성화
-    // private final FrameBufferService frameBufferService; // 립리딩 비활성화
-    // private final RestTemplate restTemplate = new RestTemplate(); // 립리딩 비활성화
+    private final LipReadingSessionContext lipReadingSessionContext;
+    private final FrameBufferService frameBufferService;
+    private final RestTemplate restTemplate = new RestTemplate();
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
@@ -111,7 +109,7 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
                                 String sessionId = session.getId();
 
                                 float confidence = result.getAlternativesList().get(0).getConfidence();
-                                // lipReadingSessionContext.store(session, transcript, confidence); // 립리딩 비활성화
+                                lipReadingSessionContext.store(session, transcript, confidence);
 
                                 // 스트림 즉시 제거 — 재시작은 다음 오디오 청크가 도착할 때 lazily 수행
                                 sttStreams.remove(sessionId);
@@ -170,12 +168,12 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
                                         session.sendMessage(new TextMessage("SYSTEM:PROCESS_ORDERS:" + ordersJson));
                                         log.info("📦 고신뢰도 주문 즉시 처리 완료 ({}건, confidence={})", orders.size(), confidence);
                                     } else {
-                                        // [저신뢰도 + NLP 성공] 립리딩 교차검증 — 립리딩 비활성화로 주석처리
-                                        // lipReadingSessionContext.storePendingOrders(orders);
-                                        // List<byte[]> frames = frameBufferService.drainFrames();
-                                        // sendFramesToPython(transcript, confidence, frames);
-                                        // session.sendMessage(new TextMessage("SYSTEM:LIPREADING_ANALYZING"));
-                                        // log.info("🔍 저신뢰도({}), 립리딩 교차검증 요청 ({}건, 프레임={})", confidence, orders.size(), frames.size());
+                                        // [저신뢰도 + NLP 성공] 립리딩 교차검증
+                                        lipReadingSessionContext.storePendingOrders(orders);
+                                        List<byte[]> frames = frameBufferService.drainFrames();
+                                        sendFramesToPython(transcript, confidence, frames);
+                                        session.sendMessage(new TextMessage("SYSTEM:LIPREADING_ANALYZING"));
+                                        log.info("🔍 저신뢰도({}), 립리딩 교차검증 요청 ({}건, 프레임={})", confidence, orders.size(), frames.size());
                                     }
                                 } else {
                                     // AI 추천 결과가 있으면 프론트에 직접 전송
@@ -195,25 +193,11 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
                                         session.sendMessage(new TextMessage("SYSTEM:AI_CANDIDATES:" + json));
                                         log.info("🤖 AI 추천 결과 직접 전송 ({}건): {}", aiSuggestions.size(), json);
                                     } else {
-                                        // AI도 실패 → 립리딩 추천 — 립리딩 비활성화로 주석처리
-                                        // List<byte[]> frames = frameBufferService.drainFrames();
-                                        // sendFramesToPython(transcript, confidence, frames);
-                                        // session.sendMessage(new TextMessage("SYSTEM:LIPREADING_ANALYZING"));
-                                        // log.info("🔍 NLP·AI 매칭 실패, 립리딩 추천 모드 (프레임={})", frames.size());
-
-                                        // 립리딩 비활성화 대체: 인기 메뉴 TOP3 전송
-                                        var popular = orderStatisticsService.getTop3Menus(null, baseUrl);
-                                        StringBuilder popularJson = new StringBuilder("[");
-                                        for (int i = 0; i < popular.size(); i++) {
-                                            if (i > 0) popularJson.append(",");
-                                            var m = popular.get(i);
-                                            popularJson.append(String.format(
-                                                "{\"id\":%d,\"name\":\"%s\",\"price\":%d,\"imageUrl\":\"%s\"}",
-                                                m.getId(), m.getName(), m.getPrice(), m.getImageUrl()));
-                                        }
-                                        popularJson.append("]");
-                                        session.sendMessage(new TextMessage("SYSTEM:POPULAR_MENUS:" + popularJson));
-                                        log.info("📊 NLP·AI 매칭 실패 → 인기 메뉴 TOP3 전송 ({}건)", popular.size());
+                                        // AI도 실패 → 립리딩 추천
+                                        List<byte[]> frames = frameBufferService.drainFrames();
+                                        sendFramesToPython(transcript, confidence, frames);
+                                        session.sendMessage(new TextMessage("SYSTEM:LIPREADING_ANALYZING"));
+                                        log.info("🔍 NLP·AI 매칭 실패, 립리딩 추천 모드 (프레임={})", frames.size());
                                     }
                                 }
                             }
@@ -308,42 +292,41 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
         cleanup(session.getId());
     }
 
-    // 립리딩 비활성화 — 복원 시 주석 해제
-    // private void sendFramesToPython(String text, float confidence, List<byte[]> frames) {
-    //     CompletableFuture.runAsync(() -> {
-    //         try {
-    //             // 1. STT 정보를 REST로 먼저 전달
-    //             Map<String, Object> body = Map.of("text", text, "confidence", confidence);
-    //             restTemplate.postForObject(visionServerUrl + "/stt", body, String.class);
-    //             log.info("Python STT 알림 전송 완료: {}", text);
-    //
-    //             if (frames.isEmpty()) {
-    //                 log.warn("전송할 프레임 없음 — 카메라 버퍼 비어있음");
-    //                 return;
-    //             }
-    //
-    //             // 2. Python /ws/camera WebSocket에 연결해서 프레임 전송
-    //             StandardWebSocketClient wsClient = new StandardWebSocketClient();
-    //             String wsUrl = visionServerUrl.replaceFirst("^https", "wss")
-    //                                           .replaceFirst("^http", "ws") + "/ws/camera";
-    //
-    //             WebSocketSession pySession = wsClient.execute(
-    //                 new AbstractWebSocketHandler() {},
-    //                 wsUrl
-    //             ).get();
-    //
-    //             for (byte[] frame : frames) {
-    //                 if (pySession.isOpen()) {
-    //                     pySession.sendMessage(new BinaryMessage(frame));
-    //                 }
-    //             }
-    //             pySession.close();
-    //             log.info("Python 카메라 WebSocket 프레임 전송 완료: {}프레임", frames.size());
-    //         } catch (Exception e) {
-    //             log.warn("Python 프레임 전송 실패 (무시): {}", e.getMessage());
-    //         }
-    //     });
-    // }
+    private void sendFramesToPython(String text, float confidence, List<byte[]> frames) {
+        CompletableFuture.runAsync(() -> {
+            try {
+                // 1. STT 정보를 REST로 먼저 전달
+                Map<String, Object> body = Map.of("text", text, "confidence", confidence);
+                restTemplate.postForObject(visionServerUrl + "/stt", body, String.class);
+                log.info("Python STT 알림 전송 완료: {}", text);
+
+                if (frames.isEmpty()) {
+                    log.warn("전송할 프레임 없음 — 카메라 버퍼 비어있음");
+                    return;
+                }
+
+                // 2. Python /ws/camera WebSocket에 연결해서 프레임 전송
+                StandardWebSocketClient wsClient = new StandardWebSocketClient();
+                String wsUrl = visionServerUrl.replaceFirst("^https", "wss")
+                                              .replaceFirst("^http", "ws") + "/ws/camera";
+
+                WebSocketSession pySession = wsClient.execute(
+                    new AbstractWebSocketHandler() {},
+                    wsUrl
+                ).get();
+
+                for (byte[] frame : frames) {
+                    if (pySession.isOpen()) {
+                        pySession.sendMessage(new BinaryMessage(frame));
+                    }
+                }
+                pySession.close();
+                log.info("Python 카메라 WebSocket 프레임 전송 완료: {}프레임", frames.size());
+            } catch (Exception e) {
+                log.warn("Python 프레임 전송 실패 (무시): {}", e.getMessage());
+            }
+        });
+    }
 
     private void cleanup(String sessionId) {
         ClientStream<StreamingRecognizeRequest> stream = sttStreams.remove(sessionId);
