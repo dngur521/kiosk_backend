@@ -129,11 +129,29 @@ Everything is keyed by `sessionId` (from WebSocket session or `X-Session-ID` hea
 
 ### Voice Flow
 
-`/ws/voice` WebSocket receives raw audio (LINEAR16, 16kHz), streams to Google Cloud STT (`ko-KR`, `singleUtterance=true`), and on final transcript calls `OrderParserService` then routes through the lip-reading decision tree. Credentials at `/home/kambook/google-key.json`.
+`/ws/voice` WebSocket receives raw audio (LINEAR16, 16kHz), streams to Google Cloud STT (`ko-KR`, `singleUtterance=true`), and on final transcript calls `OrderParserService` then routes based on NLP result + confidence. Credentials at `/home/kambook/google-key.json`.
+
+> **현재 상태 (2026-05-25): 립리딩 비활성화.** 경로 3(저신뢰도 교차검증)과 경로 4의 립리딩 폴백이 주석처리되어 no-op 상태. 활성 경로: CONFIRM_ORDER(시노님) + PROCESS_ORDERS(고신뢰도) + AI_CANDIDATES(AI 추천). 복원 방법은 아래 "Lip-Reading Flow" 섹션 참고.
 
 **STT stream lifecycle:** Lazy restart — the stream is NOT proactively restarted after a final result or error. `handleBinaryMessage` starts a new stream only when the next audio chunk arrives and no stream exists. This prevents the `OUT_OF_RANGE: Audio Timeout` infinite loop caused by keeping an empty stream alive. An `AtomicReference<ClientStream>` inside `startSttStream` detects stale `onError`/`onComplete` callbacks (fired by old streams after a new one is already running) and silently drops them.
 
 ### Lip-Reading Flow
+
+> **현재 비활성화 상태.** 아래 복원 체크리스트로 언제든지 다시 켤 수 있음.
+
+#### 복원 체크리스트 (grep `// 립리딩 비활성화`)
+
+| 파일 | 할 일 |
+|------|-------|
+| `handler/LipReadingFrameHandler.java` | `// @Component` → `@Component` |
+| `controller/LipReadingController.java` | `// @RestController`, `// @RequestMapping` 해제 |
+| `service/FrameBufferService.java` | `// @Service` → `@Service` |
+| `service/LipReadingService.java` | `// @Service` → `@Service` |
+| `service/LipReadingSessionContext.java` | `// @Component` → `@Component` |
+| `config/WebSocketConfig.java` | `LipReadingFrameHandler` import·필드·`/ws/lipreading` 등록 해제 |
+| `handler/VoiceStreamHandler.java` | imports·필드·`store()`·교차검증 경로·AI폴백 경로·`sendFramesToPython` 메서드 해제 |
+
+---
 
 Camera frames from React are buffered in Spring Boot, then forwarded to the vision server depending on STT confidence and NLP outcome.
 
