@@ -8,7 +8,7 @@ import org.springframework.stereotype.Service;
 
 import lombok.extern.slf4j.Slf4j;
 
-@Service
+// @Service // 립리딩 비활성화
 @Slf4j
 public class FrameBufferService {
 

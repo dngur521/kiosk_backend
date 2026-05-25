@@ -13,8 +13,8 @@ import com.kemini.kiosk_backend.service.LipReadingService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
-@RestController
-@RequestMapping("/api/lipreading")
+// @RestController // 립리딩 비활성화
+// @RequestMapping("/api/lipreading")
 @RequiredArgsConstructor
 @Slf4j
 public class LipReadingController {
