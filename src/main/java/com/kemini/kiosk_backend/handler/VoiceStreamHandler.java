@@ -35,6 +35,7 @@ import com.kemini.kiosk_backend.service.CartService;
 // import com.kemini.kiosk_backend.service.FrameBufferService; // 립리딩 비활성화
 // import com.kemini.kiosk_backend.service.LipReadingSessionContext; // 립리딩 비활성화
 import com.kemini.kiosk_backend.service.OrderParserService;
+import com.kemini.kiosk_backend.service.OrderStatisticsService;
 // import org.springframework.web.client.RestTemplate; // 립리딩 비활성화
 
 import lombok.RequiredArgsConstructor;
@@ -59,6 +60,7 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
     private final CartService cartService;
     private final CancelResolverService cancelResolverService;
     private final ObjectMapper objectMapper;
+    private final OrderStatisticsService orderStatisticsService;
     // private final LipReadingSessionContext lipReadingSessionContext; // 립리딩 비활성화
     // private final FrameBufferService frameBufferService; // 립리딩 비활성화
     // private final RestTemplate restTemplate = new RestTemplate(); // 립리딩 비활성화
@@ -198,6 +200,20 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
                                         // sendFramesToPython(transcript, confidence, frames);
                                         // session.sendMessage(new TextMessage("SYSTEM:LIPREADING_ANALYZING"));
                                         // log.info("🔍 NLP·AI 매칭 실패, 립리딩 추천 모드 (프레임={})", frames.size());
+
+                                        // 립리딩 비활성화 대체: 인기 메뉴 TOP3 전송
+                                        var popular = orderStatisticsService.getTop3Menus(null, baseUrl);
+                                        StringBuilder popularJson = new StringBuilder("[");
+                                        for (int i = 0; i < popular.size(); i++) {
+                                            if (i > 0) popularJson.append(",");
+                                            var m = popular.get(i);
+                                            popularJson.append(String.format(
+                                                "{\"id\":%d,\"name\":\"%s\",\"price\":%d,\"imageUrl\":\"%s\"}",
+                                                m.getId(), m.getName(), m.getPrice(), m.getImageUrl()));
+                                        }
+                                        popularJson.append("]");
+                                        session.sendMessage(new TextMessage("SYSTEM:POPULAR_MENUS:" + popularJson));
+                                        log.info("📊 NLP·AI 매칭 실패 → 인기 메뉴 TOP3 전송 ({}건)", popular.size());
                                     }
                                 }
                             }
