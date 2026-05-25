@@ -12,8 +12,10 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class FrameBufferService {
 
-    // 15fps × 5초 = 최대 75프레임 보관
-    private static final int MAX_FRAMES = 75;
+    // 15fps × 7초 = 최대 105프레임 보관 (STT 트리거 기준 -7초까지 커버)
+    private static final int MAX_FRAMES = 105;
+    // drain 시 마지막 1초(15프레임) 제외 — STT 이후 무음 구간 제거
+    private static final int TAIL_DROP_FRAMES = 15;
 
     private final ConcurrentLinkedDeque<byte[]> buffer = new ConcurrentLinkedDeque<>();
 
@@ -25,13 +27,17 @@ public class FrameBufferService {
     }
 
     public List<byte[]> drainFrames() {
-        List<byte[]> frames = new ArrayList<>(buffer.size());
+        List<byte[]> all = new ArrayList<>(buffer.size());
         byte[] frame;
         while ((frame = buffer.pollFirst()) != null) {
-            frames.add(frame);
+            all.add(frame);
         }
-        log.debug("프레임 버퍼 드레인: {}프레임", frames.size());
-        return frames;
+        // 마지막 TAIL_DROP_FRAMES개 제거 (발화 후 무음 구간)
+        int sendCount = Math.max(0, all.size() - TAIL_DROP_FRAMES);
+        List<byte[]> frames = all.subList(0, sendCount);
+        log.debug("프레임 버퍼 드레인: 전체 {}프레임 중 {}프레임 전송 (뒤 {}프레임 제거)",
+                all.size(), frames.size(), TAIL_DROP_FRAMES);
+        return new ArrayList<>(frames);
     }
 
     public int size() {

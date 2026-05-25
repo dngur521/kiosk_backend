@@ -25,7 +25,8 @@ public class LipReadingSessionContext {
         this.session = session;
         this.sttText = sttText;
         this.sttConfidence = sttConfidence;
-        this.lipReadingConsumed = false; // 새 STT마다 초기화
+        this.pendingOrders = Collections.emptyList(); // 새 STT마다 초기화
+        this.lipReadingConsumed = false;
     }
 
     public boolean tryConsumeLipReading() {

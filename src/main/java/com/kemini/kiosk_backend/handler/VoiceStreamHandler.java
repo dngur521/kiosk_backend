@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -71,16 +72,27 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
 
     private synchronized void startSttStream(WebSocketSession session) {
         String sessionId = session.getId();
-        if (sttStreams.containsKey(sessionId)) return;
+        if (sttStreams.containsKey(sessionId)) {
+            log.debug("[STT] 스트림 이미 존재 — startSttStream 스킵 (session={})", sessionId);
+            return;
+        }
 
+        log.info("[STT] 스트림 시작 시도 (session={})", sessionId);
         try {
             SpeechClient speechClient = speechClients.get(sessionId);
             if (speechClient == null || speechClient.isShutdown()) {
+                log.info("[STT] SpeechClient 새로 생성 (session={}, 기존={})",
+                        sessionId, speechClient == null ? "null" : "shutdown");
                 speechClient = initSpeechClient(session);
             }
 
+            // 이 스트림 인스턴스를 onError/onComplete에서 식별하기 위한 참조
+            AtomicReference<ClientStream<StreamingRecognizeRequest>> thisStreamRef = new AtomicReference<>();
+
             ResponseObserver<StreamingRecognizeResponse> responseObserver = new ResponseObserver<>() {
-                @Override public void onStart(StreamController controller) {}
+                @Override public void onStart(StreamController controller) {
+                    log.info("[STT] onStart — 스트림 활성화 (session={})", session.getId());
+                }
 
                 @Override
                 public void onResponse(StreamingRecognizeResponse response) {
@@ -90,7 +102,7 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
                         boolean isFinal = result.getIsFinal();
 
                         try {
-                            session.sendMessage(new TextMessage(transcript)); 
+                            session.sendMessage(new TextMessage(transcript));
 
                             if (isFinal) {
                                 log.info("🏁 최종 문장 인식: {}", transcript);
@@ -99,11 +111,25 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
                                 float confidence = result.getAlternativesList().get(0).getConfidence();
                                 lipReadingSessionContext.store(session, transcript, confidence);
 
+                                // 스트림 즉시 제거 — 재시작은 다음 오디오 청크가 도착할 때 lazily 수행
+                                sttStreams.remove(sessionId);
+                                SpeechClient oldClient = speechClients.remove(sessionId);
+                                log.info("[STT] isFinal 후 스트림 제거 (session={})", sessionId);
+                                CompletableFuture.runAsync(() -> {
+                                    if (oldClient != null) try { oldClient.close(); } catch (Exception ignored) {}
+                                });
+
                                 // 1. 파서에서 분석 결과 리스트를 가져옵니다.
                                 List<OrderParserService.OrderResult> orders = orderParserService.parseMultiOrder(sessionId, transcript, baseUrl);
 
-                                if (!orders.isEmpty()) {
-                                    if (confidence >= 1.1f) { // TODO 테스트용 — 실서비스 전 0.8f로 복원
+                                // 실제로 처리 가능한 주문이 있는지 확인 (레벤슈타인 백업만 걸린 경우 제외)
+                                boolean hasRealOrder = orders.stream().anyMatch(o ->
+                                    !o.isUnknown() && !o.isLearnedMatch() &&
+                                    (o.isAllCancel() || (o.getMenuDto() != null &&
+                                     (o.isMenuAllCancel() || o.isCancel() || o.getQuantity() > 0))));
+
+                                if (hasRealOrder) {
+                                    if (confidence >= 0.6f) { // TODO 테스트용 — 실서비스 전 0.8f로 복원
                                         // [고신뢰도] 립리딩 서버 호출 없이 즉시 처리합니다.
                                         for (OrderParserService.OrderResult order : orders) {
                                             if (order.isUnknown() || order.isLearnedMatch()) continue;
@@ -124,13 +150,19 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
                                         session.sendMessage(new TextMessage("SYSTEM:PROCESS_ORDERS:" + ordersJson));
                                         log.info("📦 고신뢰도 주문 즉시 처리 완료 ({}건, confidence={})", orders.size(), confidence);
                                     } else {
-                                        // [저신뢰도] 버퍼 프레임을 Python에 전달 후 콜백 대기합니다.
+                                        // [저신뢰도 + NLP 성공] 립리딩 교차검증
                                         lipReadingSessionContext.storePendingOrders(orders);
                                         List<byte[]> frames = frameBufferService.drainFrames();
                                         sendFramesToPython(transcript, confidence, frames);
                                         session.sendMessage(new TextMessage("SYSTEM:LIPREADING_ANALYZING"));
-                                        log.info("🔍 저신뢰도({}), 립리딩 분석 요청 ({}건, 프레임={})", confidence, orders.size(), frames.size());
+                                        log.info("🔍 저신뢰도({}), 립리딩 교차검증 요청 ({}건, 프레임={})", confidence, orders.size(), frames.size());
                                     }
+                                } else {
+                                    // [NLP 매칭 실패 또는 레벤슈타인만 걸림] confidence 무관하게 립리딩 추천
+                                    List<byte[]> frames = frameBufferService.drainFrames();
+                                    sendFramesToPython(transcript, confidence, frames);
+                                    session.sendMessage(new TextMessage("SYSTEM:LIPREADING_ANALYZING"));
+                                    log.info("🔍 NLP 매칭 실패, 립리딩 추천 모드 (프레임={})", frames.size());
                                 }
                             }
                         } catch (Exception e) { 
@@ -138,12 +170,32 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
                         }
                     }
                 }
-                @Override public void onError(Throwable t) { sttStreams.remove(sessionId); }
-                @Override public void onComplete() { sttStreams.remove(sessionId); }
+                @Override public void onError(Throwable t) {
+                    // 이미 새 스트림으로 교체된 경우 stale 콜백 무시
+                    if (sttStreams.get(sessionId) != thisStreamRef.get()) {
+                        log.debug("[STT] onError 무시 — stale 스트림 콜백 (session={})", session.getId());
+                        return;
+                    }
+                    log.warn("[STT] onError — 스트림 제거 (session={}, error={})",
+                            session.getId(), t.getMessage());
+                    sttStreams.remove(sessionId);
+                    SpeechClient oldClient = speechClients.remove(sessionId);
+                    CompletableFuture.runAsync(() -> {
+                        if (oldClient != null) try { oldClient.close(); } catch (Exception ignored) {}
+                    });
+                }
+                @Override public void onComplete() {
+                    if (sttStreams.get(sessionId) != thisStreamRef.get()) {
+                        log.debug("[STT] onComplete 무시 — stale 스트림 콜백 (session={})", session.getId());
+                        return;
+                    }
+                    log.debug("[STT] onComplete (session={})", session.getId());
+                }
             };
 
-            ClientStream<StreamingRecognizeRequest> clientStream = 
+            ClientStream<StreamingRecognizeRequest> clientStream =
                     speechClient.streamingRecognizeCallable().splitCall(responseObserver);
+            thisStreamRef.set(clientStream);
             
             StreamingRecognitionConfig config = StreamingRecognitionConfig.newBuilder()
                     .setConfig(RecognitionConfig.newBuilder()
@@ -152,12 +204,14 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
                             .setEncoding(RecognitionConfig.AudioEncoding.LINEAR16)
                             .build())
                     .setInterimResults(true)
+                    .setSingleUtterance(true)
                     .build();
 
             clientStream.send(StreamingRecognizeRequest.newBuilder().setStreamingConfig(config).build());
             sttStreams.put(sessionId, clientStream);
+            log.info("[STT] 스트림 생성 완료 (session={})", sessionId);
 
-        } catch (Exception e) { log.error("STT 스트림 생성 실패", e); }
+        } catch (Exception e) { log.error("[STT] 스트림 생성 실패 (session={})", sessionId, e); }
     }
 
     private SpeechClient initSpeechClient(WebSocketSession session) throws Exception {
@@ -174,13 +228,26 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
     @Override
     protected void handleBinaryMessage(WebSocketSession session, BinaryMessage message) throws Exception {
         String sessionId = session.getId();
-        if (!sttStreams.containsKey(sessionId)) startSttStream(session);
+        if (!sttStreams.containsKey(sessionId)) {
+            log.info("[STT] 오디오 수신 시 스트림 없음 — 재시작 트리거 (session={})", sessionId);
+            startSttStream(session);
+        }
 
         ClientStream<StreamingRecognizeRequest> clientStream = sttStreams.get(sessionId);
         if (clientStream != null) {
-            clientStream.send(StreamingRecognizeRequest.newBuilder()
-                    .setAudioContent(ByteString.copyFrom(message.getPayload().array()))
-                    .build());
+            try {
+                clientStream.send(StreamingRecognizeRequest.newBuilder()
+                        .setAudioContent(ByteString.copyFrom(message.getPayload().array()))
+                        .build());
+            } catch (Exception e) {
+                log.warn("[STT] 오디오 전송 실패 — 스트림 제거 후 재시작 (session={}, error={})",
+                        sessionId, e.getMessage());
+                sttStreams.remove(sessionId);
+                speechClients.remove(sessionId);
+                startSttStream(session);
+            }
+        } else {
+            log.warn("[STT] startSttStream 후에도 스트림 null (session={})", sessionId);
         }
     }
 
