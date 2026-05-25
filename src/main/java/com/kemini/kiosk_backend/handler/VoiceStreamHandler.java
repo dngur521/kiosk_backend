@@ -158,11 +158,29 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
                                         log.info("🔍 저신뢰도({}), 립리딩 교차검증 요청 ({}건, 프레임={})", confidence, orders.size(), frames.size());
                                     }
                                 } else {
-                                    // [NLP 매칭 실패 또는 레벤슈타인만 걸림] confidence 무관하게 립리딩 추천
-                                    List<byte[]> frames = frameBufferService.drainFrames();
-                                    sendFramesToPython(transcript, confidence, frames);
-                                    session.sendMessage(new TextMessage("SYSTEM:LIPREADING_ANALYZING"));
-                                    log.info("🔍 NLP 매칭 실패, 립리딩 추천 모드 (프레임={})", frames.size());
+                                    // AI 추천 결과가 있으면 프론트에 직접 전송
+                                    List<com.kemini.kiosk_backend.dto.response.MenuResponseDto> aiSuggestions = orders.stream()
+                                        .filter(o -> o.isUnknown() && o.getSuggestedMenus() != null && !o.getSuggestedMenus().isEmpty())
+                                        .flatMap(o -> o.getSuggestedMenus().stream())
+                                        .toList();
+
+                                    if (!aiSuggestions.isEmpty()) {
+                                        StringBuilder json = new StringBuilder("[");
+                                        for (int i = 0; i < aiSuggestions.size(); i++) {
+                                            if (i > 0) json.append(",");
+                                            var m = aiSuggestions.get(i);
+                                            json.append(String.format("{\"id\":%d,\"name\":\"%s\",\"quantity\":1}", m.getId(), m.getName()));
+                                        }
+                                        json.append("]");
+                                        session.sendMessage(new TextMessage("SYSTEM:AI_CANDIDATES:" + json));
+                                        log.info("🤖 AI 추천 결과 직접 전송 ({}건): {}", aiSuggestions.size(), json);
+                                    } else {
+                                        // AI도 실패 → 립리딩 추천
+                                        List<byte[]> frames = frameBufferService.drainFrames();
+                                        sendFramesToPython(transcript, confidence, frames);
+                                        session.sendMessage(new TextMessage("SYSTEM:LIPREADING_ANALYZING"));
+                                        log.info("🔍 NLP·AI 매칭 실패, 립리딩 추천 모드 (프레임={})", frames.size());
+                                    }
                                 }
                             }
                         } catch (Exception e) { 
