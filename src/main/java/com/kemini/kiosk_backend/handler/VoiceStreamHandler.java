@@ -256,25 +256,43 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
     @Override
     protected void handleBinaryMessage(WebSocketSession session, BinaryMessage message) throws Exception {
         String sessionId = session.getId();
+        byte[] audioBytes = message.getPayload().array();
+
         if (!sttStreams.containsKey(sessionId)) {
             log.info("[STT] 오디오 수신 시 스트림 없음 — 재시작 트리거 (session={})", sessionId);
             startSttStream(session);
         }
 
         ClientStream<StreamingRecognizeRequest> clientStream = sttStreams.get(sessionId);
-        if (clientStream != null) {
-            try {
-                clientStream.send(StreamingRecognizeRequest.newBuilder()
-                        .setAudioContent(ByteString.copyFrom(message.getPayload().array()))
-                        .build());
-            } catch (Exception e) {
-                log.warn("[STT] 오디오 전송 실패 — 스트림 제거 후 재시작 (session={}, error={})",
-                        sessionId, e.getMessage());
-                sttStreams.remove(sessionId);
-                startSttStream(session);
+        if (clientStream == null) {
+            // containsKey 체크와 get 사이에 isFinal/onError가 스트림을 제거한 경우 — 1회 재시도
+            startSttStream(session);
+            clientStream = sttStreams.get(sessionId);
+            if (clientStream == null) {
+                log.warn("[STT] 스트림 생성 실패로 오디오 드롭 (session={})", sessionId);
+                return;
             }
-        } else {
-            log.warn("[STT] startSttStream 후에도 스트림 null (session={})", sessionId);
+        }
+
+        try {
+            clientStream.send(StreamingRecognizeRequest.newBuilder()
+                    .setAudioContent(ByteString.copyFrom(audioBytes))
+                    .build());
+        } catch (Exception e) {
+            log.warn("[STT] 오디오 전송 실패 — 스트림 제거 후 재시작 (session={}, error={})",
+                    sessionId, e.getMessage());
+            sttStreams.remove(sessionId);
+            startSttStream(session);
+            ClientStream<StreamingRecognizeRequest> newStream = sttStreams.get(sessionId);
+            if (newStream != null) {
+                try {
+                    newStream.send(StreamingRecognizeRequest.newBuilder()
+                            .setAudioContent(ByteString.copyFrom(audioBytes))
+                            .build());
+                } catch (Exception e2) {
+                    log.warn("[STT] 재전송도 실패 (session={})", sessionId);
+                }
+            }
         }
     }
 
