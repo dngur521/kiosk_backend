@@ -45,9 +45,9 @@ public class OrderParserService {
         // --- [기존 로직 1] 매칭 후보군 생성 (유지) ---
         List<MenuCandidate> candidates = new ArrayList<>();
         menuRepository.findAll().forEach(m ->
-            candidates.add(new MenuCandidate(m, m.getName().replaceAll("\\s", ""))));
+            candidates.add(new MenuCandidate(m, m.getName().replaceAll("\\s", ""), false)));
         menuSynonymRepository.findAll().forEach(s ->
-            candidates.add(new MenuCandidate(s.getMenu(), s.getSynonym().replaceAll("\\s", ""))));
+            candidates.add(new MenuCandidate(s.getMenu(), s.getSynonym().replaceAll("\\s", ""), true)));
         
         candidates.sort((a, b) -> Integer.compare(b.text.length(), a.text.length()));
 
@@ -69,7 +69,7 @@ public class OrderParserService {
                 }
 
                 if (!isAlreadyOccupied) {
-                    matches.add(new MenuMatch(cand.menu, idx));
+                    matches.add(new MenuMatch(cand.menu, idx, cand.isSynonym));
                     for (int i = idx; i < idx + cand.text.length(); i++) occupied[i] = true;
                 }
                 idx = cleanInput.indexOf(cand.text, idx + 1);
@@ -93,7 +93,7 @@ public class OrderParserService {
                 log.info("💾 Redis 컨텍스트 업데이트 시도 중... 세션: {}", sessionId);
                 orderContextService.updateContext(sessionId, current.menu.getId());
                 log.info("✅ Redis 업데이트 완료!");
-                results.add(new OrderResult(new MenuResponseDto(current.menu, baseUrl), (qty == null ? 1 : qty), isCancel, isMenuAllCancel, false, false, null, false));
+                results.add(new OrderResult(new MenuResponseDto(current.menu, baseUrl), (qty == null ? 1 : qty), isCancel, isMenuAllCancel, false, false, null, current.isSynonym));
             }
         } else {
             // --- [기존 로직 4] 지시어 및 전체 취소 처리 (유지) ---
@@ -172,6 +172,7 @@ public class OrderParserService {
     private static class MenuMatch {
         Menu menu;
         int startIdx;
+        boolean isSynonym;
     }
 
     @AllArgsConstructor
@@ -191,5 +192,6 @@ public class OrderParserService {
     private static class MenuCandidate {
         Menu menu;
         String text;
+        boolean isSynonym;
     }
 }

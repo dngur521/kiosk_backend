@@ -122,17 +122,35 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
                                 // 1. 파서에서 분석 결과 리스트를 가져옵니다.
                                 List<OrderParserService.OrderResult> orders = orderParserService.parseMultiOrder(sessionId, transcript, baseUrl);
 
-                                // 실제로 처리 가능한 주문이 있는지 확인 (레벤슈타인 백업만 걸린 경우 제외)
+                                // 실제로 처리 가능한 주문이 있는지 확인 (isUnknown 제외)
                                 boolean hasRealOrder = orders.stream().anyMatch(o ->
-                                    !o.isUnknown() && !o.isLearnedMatch() &&
+                                    !o.isUnknown() &&
                                     (o.isAllCancel() || (o.getMenuDto() != null &&
                                      (o.isMenuAllCancel() || o.isCancel() || o.getQuantity() > 0))));
 
+                                // 시노님으로 매칭된 항목이 하나라도 있으면 사용자 확인 필요
+                                boolean hasSynonymMatch = orders.stream().anyMatch(o ->
+                                    o.isLearnedMatch() && o.getMenuDto() != null);
+
                                 if (hasRealOrder) {
-                                    if (confidence >= 0.6f) { // TODO 테스트용 — 실서비스 전 0.8f로 복원
+                                    if (hasSynonymMatch) {
+                                        // [시노님 매칭] 프론트에 확인 모달 요청
+                                        StringBuilder json = new StringBuilder("[");
+                                        boolean first = true;
+                                        for (OrderParserService.OrderResult o : orders) {
+                                            if (o.isUnknown() || o.getMenuDto() == null) continue;
+                                            if (!first) json.append(",");
+                                            json.append(String.format("{\"id\":%d,\"name\":\"%s\",\"quantity\":%d}",
+                                                    o.getMenuDto().getId(), o.getMenuDto().getName(), o.getQuantity()));
+                                            first = false;
+                                        }
+                                        json.append("]");
+                                        session.sendMessage(new TextMessage("SYSTEM:CONFIRM_ORDER:" + json));
+                                        log.info("❓ 시노님 매칭 확인 요청: {}", json);
+                                    } else if (confidence >= 0.6f) { // TODO 테스트용 — 실서비스 전 0.8f로 복원
                                         // [고신뢰도] 립리딩 서버 호출 없이 즉시 처리합니다.
                                         for (OrderParserService.OrderResult order : orders) {
-                                            if (order.isUnknown() || order.isLearnedMatch()) continue;
+                                            if (order.isUnknown()) continue;
                                             if (order.isAllCancel()) {
                                                 cartService.clearCart(sessionId);
                                             } else if (order.getMenuDto() != null) {
