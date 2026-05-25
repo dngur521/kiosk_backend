@@ -115,7 +115,7 @@ The core of the system. When a user utterance arrives, it resolves menus through
 1. **Greedy exact match** — longest-first matching against menu names + synonyms
 2. **Synonym lookup** — user-taught phrases from `MenuSynonym` table
 3. **Pronoun resolution** — "이거/그거" via Redis context (`OrderContextService`, 10-min TTL)
-4. **Semantic AI** — calls Python backend at `http://localhost:8000/recommend`; filters results with `score ≥ 0.5` AND `score ≥ (maxScore - 0.05)`
+4. **Semantic AI** — calls Python backend at `http://localhost:8000/recommend`; Python server applies `min_absolute_threshold = 0.78` before returning; Spring Boot additionally filters with `score ≥ 0.5` AND `score ≥ (maxScore - 0.05)`
 5. **Levenshtein fallback** — edit-distance nearest match
 
 Quantity words ("하나", "두개", etc.) are resolved by `QuantityResolverService` using `QuantitySynonym` DB table, then regex `\d+`. Cancellation is detected by `CancelResolverService` using `CancelSynonym` table.

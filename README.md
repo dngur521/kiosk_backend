@@ -63,7 +63,7 @@
 1. Greedy 정확 매칭   — 메뉴명·동의어를 길이 내림차순으로 탐색
 2. 동의어 매칭        — 사용자가 학습시킨 별칭 (예: "아아" → 아이스 아메리카노)
 3. 대명사 해석        — "이거/그거" → Redis에 저장된 마지막 주문 메뉴
-4. AI 의미 검색       — Python 서버 호출, score ≥ 0.5 & ≥ (maxScore - 0.05) 필터
+4. AI 의미 검색       — Python 서버 호출 (min_absolute_threshold=0.78), score ≥ 0.5 & ≥ (maxScore - 0.05) 추가 필터
 5. Levenshtein 폴백  — 편집 거리 기반 근사 매칭 (score > 0.3)
 ```
 
