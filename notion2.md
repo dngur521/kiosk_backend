@@ -155,34 +155,84 @@ sequenceDiagram
 
 ---
 
-## 4. NLP 주문 파싱 파이프라인
+## 4. 통합 주문 파싱 파이프라인
 
 ```mermaid
 flowchart TD
-    INPUT["입력 발화<br/>예: '아아 두 개랑 라떼 하나 줘'"]
+    AUDIO["🎤 오디오 입력 (PCM 16kHz)"]
+    STT["Google Cloud STT\nko-KR · singleUtterance=true\n→ transcript + confidence"]
 
-    S1{"1단계<br/>Greedy 정확 매칭<br/>메뉴명·동의어 길이 내림차순"}
-    S2{"2단계<br/>동의어 매칭<br/>MenuSynonym DB 조회"}
-    S3{"3단계<br/>대명사 해석<br/>이거·그거 → Redis 컨텍스트"}
-    S4{"4단계<br/>AI 의미 검색<br/>Python :8000, score ≥ 0.84"}
-    S5{"5단계<br/>Levenshtein 폴백<br/>편집 거리, score > 0.3"}
-    UNKNOWN["인식 불가<br/>학습 요청 유도"]
-    RESULT["파싱 결과<br/>[{menu, qty, cancel?}, ...]"]
+    subgraph NLP["NLP 5단계 파이프라인 (OrderParserService)"]
+        S1{"① Greedy 정확 매칭\n메뉴명·동의어 길이 내림차순"}
+        S2{"② 동의어 매칭\nMenuSynonym DB"}
+        S3{"③ 대명사 해석\n이거·그거 → Redis 컨텍스트"}
+        S4{"④ AI 의미 검색\nPython :8000 · score ≥ 0.84"}
+        S5{"⑤ Levenshtein 폴백\n편집 거리 score > 0.3"}
+        S1 -- 미매칭 --> S2
+        S2 -- 미매칭 --> S3
+        S3 -- 미매칭 --> S4
+        S4 -- 미매칭 --> S5
+    end
 
-    INPUT --> S1
-    S1 -- 매칭됨 --> RESULT
-    S1 -- 미매칭 --> S2
-    S2 -- 매칭됨 --> RESULT
-    S2 -- 미매칭 --> S3
-    S3 -- 매칭됨 --> RESULT
-    S3 -- 미매칭 --> S4
-    S4 -- 매칭됨 --> RESULT
-    S4 -- 미매칭 --> S5
-    S5 -- 매칭됨 --> RESULT
-    S5 -- 미매칭 --> UNKNOWN
+    HRO{"hasRealOrder?\n실제 메뉴+수량 또는\n취소 명령 파악됨?"}
+    CONF{"confidence ≥ 0.6?"}
+    AICHK{"AI 추천 결과\n있음?"}
+
+    DIRECT["장바구니 즉시 추가"]
+    PROCESS["→ SYSTEM:PROCESS_ORDERS:{json}"]
+
+    AICAND["→ SYSTEM:AI_CANDIDATES:[...]\n프론트 확인 모달"]
+
+    PENDING["pendingOrders 저장\nFrameBuffer drainFrames()"]
+
+    subgraph VISION["Python 비전서버 (LipReading)"]
+        VSTT["POST /stt\n{text, confidence}"]
+        VCAM["WS /ws/camera\n프레임 최대 90장 전송"]
+        MP["MediaPipe\n입술 랜드마크 분석"]
+        CB["POST /api/lipreading/result\n{lip_vowels} 콜백"]
+        VSTT --> VCAM --> MP --> CB
+    end
+
+    CROSSCHK{"교차검증\n유효 후보 존재?"}
+    SIMCHK{"모음 유사도\n≥ 0.5?"}
+    SCAN["전체 메뉴 모음 스캔\nTOP 3 선정"]
+    TOPCHK{"최고 유사도\n≥ 0.3?"}
+
+    MATCH["장바구니 추가\n→ SYSTEM:LIPREADING_MATCH:{id}:{name}:{score}"]
+    RCAND["→ SYSTEM:LIPREADING_CANDIDATES:[...]\n프론트 확인 모달"]
+    FAILED["→ SYSTEM:LIPREADING_FAILED"]
+
+    AUDIO --> STT
+    STT --> S1
+    S1 -- 매칭됨 --> HRO
+    S2 -- 매칭됨 --> HRO
+    S3 -- 매칭됨 --> HRO
+    S4 -- 매칭됨(suggestedMenus) --> HRO
+    S5 -- 매칭됨(suggestedMenus) --> HRO
+    S5 -- 미매칭 --> HRO
+
+    HRO -- "true" --> CONF
+    HRO -- "false" --> AICHK
+
+    CONF -- "true (≥ 0.6)" --> DIRECT --> PROCESS
+    CONF -- "false (< 0.6)" --> PENDING --> VSTT
+
+    AICHK -- "있음" --> AICAND
+    AICHK -- "없음" --> VSTT
+
+    CB -- "hasPendingOrders=true" --> CROSSCHK
+    CB -- "hasPendingOrders=false" --> SCAN
+
+    CROSSCHK -- "있음" --> SIMCHK
+    CROSSCHK -- "없음(후보 전무)" --> SCAN
+
+    SIMCHK -- "≥ 0.5" --> MATCH
+    SIMCHK -- "< 0.5" --> FAILED
+
+    SCAN --> TOPCHK
+    TOPCHK -- "≥ 0.3" --> RCAND
+    TOPCHK -- "< 0.3" --> FAILED
 ```
-
-> **Levenshtein 폴백 주의**: 5단계만 매칭된 결과는 `isLearnedMatch=false, isUnknown=false`이나 `hasRealOrder=false`로 판정되어 립리딩 추천 경로로 자동 라우팅됩니다.
 
 ---
 
