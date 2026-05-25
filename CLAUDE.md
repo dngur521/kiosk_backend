@@ -141,13 +141,16 @@ Camera frames from React are buffered in Spring Boot, then forwarded to the visi
 2. `LipReadingFrameHandler` stores binary frames in `FrameBufferService` (circular buffer, max **105 frames = 15fps × 7s**; `drainFrames()` drops the last 15 frames / 1s to remove post-utterance silence)
 3. On STT `isFinal=true`, `VoiceStreamHandler` evaluates two dimensions:
 
-   **`hasRealOrder`** — true only when NLP produced at least one actionable result (non-Levenshtein, non-learned-match, with a real menu+quantity or a cancel action):
+   **`hasRealOrder`** — true when NLP produced at least one actionable result (non-`isUnknown`, with a real menu+quantity or a cancel action). Synonym matches (`isLearnedMatch=true`) count toward `hasRealOrder`.
 
-   | `hasRealOrder` | confidence | Path |
-   |---|---|---|
-   | `true` | ≥ 0.6f | **Direct** — cart add immediately, vision server not called; send `SYSTEM:PROCESS_ORDERS:{json}` |
-   | `true` | < 0.6f | **Cross-validation** — `storePendingOrders`, drain buffer, POST `/stt` to vision server, send frames via WS; send `SYSTEM:LIPREADING_ANALYZING` |
-   | `false` | any | **Recommendation** — NLP failed or Levenshtein-only; drain buffer, send frames; send `SYSTEM:LIPREADING_ANALYZING` |
+   **`hasSynonymMatch`** — true when any matched order came from the `MenuSynonym` table (as opposed to a direct menu name match).
+
+   | `hasRealOrder` | `hasSynonymMatch` | confidence | Path |
+   |---|---|---|---|
+   | `true` | `true` | any | **Confirm** — send `SYSTEM:CONFIRM_ORDER:{json}`; frontend shows "맞아요/아니요" modal |
+   | `true` | `false` | ≥ 0.6f | **Direct** — cart add immediately; send `SYSTEM:PROCESS_ORDERS:{json}` |
+   | `true` | `false` | < 0.6f | **Cross-validation** — `storePendingOrders`, drain buffer, POST `/stt` to vision server; send `SYSTEM:LIPREADING_ANALYZING` |
+   | `false` | — | any | **Recommendation** — NLP failed or Levenshtein-only; check AI suggestions first, then lip-reading |
 
 4. Vision server analyzes frames → `POST /api/lipreading/result` callback → `LipReadingService.processResult(lipVowels)`
 5. `LipReadingService` dispatches based on whether pending orders exist:

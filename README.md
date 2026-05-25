@@ -76,13 +76,14 @@
 
 **NLP 결과 × STT confidence 분기 로직:**
 
-| NLP 결과 (`hasRealOrder`) | confidence | 처리 경로 |
-|---|---|---|
-| 실제 주문 있음 | ≥ 0.6 | **즉시 처리** — 장바구니 추가 + `SYSTEM:PROCESS_ORDERS:{json}` |
-| 실제 주문 있음 | < 0.6 | **교차 검증** — 보류 주문 저장, 카메라 프레임 전달, `SYSTEM:LIPREADING_ANALYZING` |
-| NLP 실패 / Levenshtein만 | 무관 | **립리딩 추천** — 카메라 프레임 전달, `SYSTEM:LIPREADING_ANALYZING` |
+| NLP 결과 | 시노님 매칭 | confidence | 처리 경로 |
+|---|---|---|---|
+| 실제 주문 있음 | O | 무관 | **확인 모달** — `SYSTEM:CONFIRM_ORDER:{json}` |
+| 실제 주문 있음 | X | ≥ 0.6 | **즉시 처리** — 장바구니 추가 + `SYSTEM:PROCESS_ORDERS:{json}` |
+| 실제 주문 있음 | X | < 0.6 | **교차 검증** — 보류 주문 저장, 카메라 프레임 전달, `SYSTEM:LIPREADING_ANALYZING` |
+| NLP 실패 / Levenshtein만 | — | 무관 | **AI 추천 또는 립리딩** |
 
-> `hasRealOrder`: NLP가 Levenshtein 폴백이나 학습 매칭이 아닌 실제 메뉴+수량 또는 취소 명령을 찾았을 때 `true`
+> 시노님 매칭: `MenuSynonym` 테이블의 별칭으로 매칭된 경우. 직접 메뉴명 매칭은 즉시 처리.
 
 `/ws/lipreading` WebSocket으로 카메라 프레임을 수신합니다.
 
@@ -92,8 +93,12 @@
 
 | 메시지 | 의미 |
 |--------|------|
+| `SYSTEM:CONFIRM_ORDER:[{...}]` | 시노님 매칭 → 프론트에서 "맞아요/아니요" 확인 모달 |
+| `SYSTEM:PROCESS_ORDERS:{json}` | 직접 매칭 고신뢰도 → 자동 장바구니 추가 |
+| `SYSTEM:AI_CANDIDATES:[{...}]` | AI 추천 결과 직접 전송 → 프론트 선택 모달 |
+| `SYSTEM:LIPREADING_ANALYZING` | 립리딩 분석 시작 알림 |
 | `SYSTEM:LIPREADING_MATCH:{id}:{name}:{score}` | 교차 검증 성공 → 자동 장바구니 추가 |
-| `SYSTEM:LIPREADING_CANDIDATES:[{...},...]` | 추천 모드 → 프론트에서 사용자 확인 모달 표시 |
+| `SYSTEM:LIPREADING_CANDIDATES:[{...},...]` | 립리딩 추천 → 프론트에서 사용자 확인 모달 |
 | `SYSTEM:LIPREADING_FAILED` | 립리딩 유사도 기준 미달 |
 
 ### 3. 실시간 학습
