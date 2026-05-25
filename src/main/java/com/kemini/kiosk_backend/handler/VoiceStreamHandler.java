@@ -111,13 +111,9 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
                                 float confidence = result.getAlternativesList().get(0).getConfidence();
                                 lipReadingSessionContext.store(session, transcript, confidence);
 
-                                // 스트림 즉시 제거 — 재시작은 다음 오디오 청크가 도착할 때 lazily 수행
+                                // 스트림만 제거 — SpeechClient(gRPC 채널)는 세션 동안 유지
                                 sttStreams.remove(sessionId);
-                                SpeechClient oldClient = speechClients.remove(sessionId);
                                 log.info("[STT] isFinal 후 스트림 제거 (session={})", sessionId);
-                                CompletableFuture.runAsync(() -> {
-                                    if (oldClient != null) try { oldClient.close(); } catch (Exception ignored) {}
-                                });
 
                                 // 1. 파서에서 분석 결과 리스트를 가져옵니다.
                                 List<OrderParserService.OrderResult> orders = orderParserService.parseMultiOrder(sessionId, transcript, baseUrl);
@@ -215,10 +211,6 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
                     log.warn("[STT] onError — 스트림 제거 (session={}, error={})",
                             session.getId(), t.getMessage());
                     sttStreams.remove(sessionId);
-                    SpeechClient oldClient = speechClients.remove(sessionId);
-                    CompletableFuture.runAsync(() -> {
-                        if (oldClient != null) try { oldClient.close(); } catch (Exception ignored) {}
-                    });
                 }
                 @Override public void onComplete() {
                     if (sttStreams.get(sessionId) != thisStreamRef.get()) {
@@ -279,7 +271,6 @@ public class VoiceStreamHandler extends BinaryWebSocketHandler {
                 log.warn("[STT] 오디오 전송 실패 — 스트림 제거 후 재시작 (session={}, error={})",
                         sessionId, e.getMessage());
                 sttStreams.remove(sessionId);
-                speechClients.remove(sessionId);
                 startSttStream(session);
             }
         } else {
