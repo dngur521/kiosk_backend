@@ -168,6 +168,20 @@ Menu images: UUID-prefixed filenames stored at `~/kiosk_uploads/menu/`. Served f
 
 The base URL is configured via `app.base-url` in `application.yml` and injected with `@Value("${app.base-url}")` — do not hardcode it in service/controller classes.
 
+## Known Risks & Gotchas
+
+### LipReadingSessionContext is not keyed by sessionId
+
+`LipReadingSessionContext` is a single global Spring bean (`volatile` fields, no map). This is intentional — the kiosk assumes a single concurrent user. Two failure modes to be aware of:
+
+1. **Rapid consecutive utterances** — if a second STT `isFinal` arrives while Python is still processing the first utterance's frames, the second `store()` call resets `pendingOrders=empty` and `lipReadingConsumed=false`. When the first Python callback arrives it finds empty `pendingOrders` and falls into recommendation mode instead of cross-validation. Unlikely in normal use (`singleUtterance=true` forces a pause between utterances) but reproducible with fast speech.
+
+2. **Page refresh mid-flight** — a browser refresh creates a new WebSocket session (new sessionId). If Python is still processing frames from the old session, its callback fires on the new session's context. The `tryConsumeLipReading()` flag partially guards against this, but depending on timing it can consume the new session's first lip-reading slot. Fix if this becomes observable: key `LipReadingSessionContext` by sessionId instead of a single bean.
+
+### `cleanup()` does not clear LipReadingSessionContext
+
+`afterConnectionClosed` → `cleanup(sessionId)` tears down the STT stream and SpeechClient but leaves `LipReadingSessionContext.session` pointing at the now-closed WebSocket. `ws.isOpen()` checks in `LipReadingService` prevent actual send errors, but stale state persists until the next `store()` call. If this becomes an issue, add `lipReadingSessionContext.store(null, null, 0f)` (or a dedicated `clear()`) inside `cleanup()`.
+
 ## Key Entity Relationships
 
 - `MenuCategory` 1→N `Menu` 1→N `MenuSynonym`
