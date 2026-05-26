@@ -135,6 +135,8 @@ Everything is keyed by `sessionId` (from WebSocket session or `X-Session-ID` hea
 
 **STT stream lifecycle:** Lazy restart — the stream is NOT proactively restarted after a final result or error. `handleBinaryMessage` starts a new stream only when the next audio chunk arrives and no stream exists. This prevents the `OUT_OF_RANGE: Audio Timeout` infinite loop caused by keeping an empty stream alive. An `AtomicReference<ClientStream>` inside `startSttStream` detects stale `onError`/`onComplete` callbacks (fired by old streams after a new one is already running) and silently drops them.
 
+**SpeechClient lifecycle:** The `SpeechClient` (gRPC channel) is created once per WebSocket session (`afterConnectionEstablished`) and kept alive until `cleanup()`. Only the `ClientStream` is recreated per utterance. Closing and recreating the client on every `isFinal` caused 200–500ms reconnection lag that caused the beginning of the next utterance to be bunched-up and dropped.
+
 ### Lip-Reading Flow
 
 Camera frames from React are buffered in Spring Boot, then forwarded to the vision server depending on STT confidence and NLP outcome.
@@ -156,7 +158,7 @@ Camera frames from React are buffered in Spring Boot, then forwarded to the visi
 
 4. Vision server analyzes frames → `POST /api/lipreading/result` callback → `LipReadingService.processResult(lipVowels)`
 5. `LipReadingService` dispatches based on whether pending orders exist:
-   - **Cross-validation path** (`hasPendingOrders=true`): compare each pending menu's vowels against lip vowels via Levenshtein similarity. If `bestScore ≥ 0.5` → cart add + `SYSTEM:LIPREADING_MATCH:{id}:{name}:{score}`. If `bestOrder == null` (e.g. only Levenshtein orders pending, which are filtered out) → falls back to recommendation path. If `bestScore < 0.5` → `SYSTEM:LIPREADING_FAILED`.
+   - **Cross-validation path** (`hasPendingOrders=true`): compare each pending menu's vowels against lip vowels via Levenshtein similarity. If `bestScore ≥ 0.5` → cart add + `SYSTEM:LIPREADING_MATCH:{id}:{name}:{score}`. If `bestOrder == null` or `bestScore < 0.5` → falls back to recommendation path (both cases now call `processRecommendation`).
    - **Recommendation path** (`hasPendingOrders=false`): scan all menus, compute vowel similarity, send TOP 3 as `SYSTEM:LIPREADING_CANDIDATES:[{"id":N,"name":"...","score":0.XX,"quantity":1},...]` for user to confirm.
 
 Vision server URL configured via `app.vision-server-url` in `application.yml` — do not hardcode.

@@ -98,8 +98,7 @@
 | `SYSTEM:AI_CANDIDATES:[{...}]` | AI 추천 결과 직접 전송 → 프론트 선택 모달 |
 | `SYSTEM:LIPREADING_ANALYZING` | 립리딩 분석 시작 알림 |
 | `SYSTEM:LIPREADING_MATCH:{id}:{name}:{score}` | 교차 검증 성공 → 자동 장바구니 추가 |
-| `SYSTEM:LIPREADING_CANDIDATES:[{...},...]` | 립리딩 추천 → 프론트에서 사용자 확인 모달 |
-| `SYSTEM:LIPREADING_FAILED` | 립리딩 유사도 기준 미달 |
+| `SYSTEM:LIPREADING_CANDIDATES:[{...},...]` | 립리딩 추천 (교차검증 실패 포함) → 프론트에서 사용자 확인 모달 |
 
 ### 3. 실시간 학습
 
